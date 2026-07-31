@@ -583,16 +583,27 @@ class TestVmDrivers(unittest.TestCase):
         self.assertEqual(
             self.vm._disk_format(self.vm.VmSpec(image="/x/d.qcow2", disk_format="raw")), "raw")
 
-    def test_a_container_reference_is_not_a_bootable_disk(self):
-        request = envspec.EnvironmentRequest(backend="vm", image="debian:13-slim")
+    # These two must hold whether or not this machine has qemu: without it the
+    # orchestrator reports the missing hypervisor, which is the first problem
+    # it meets and an equally correct answer. Asserting the later message made
+    # the test pass only on machines like the one it was written on.
+    def _vm_unavailable(self, request):
         state = Orchestrator().available(request)
         self.assertFalse(state.satisfied)
         self.assertEqual(state.action, envspec.UNAVAILABLE)
+        self.assertTrue(state.detail.strip(), "an unavailable request must say why")
+        return state
+
+    def test_a_container_reference_is_not_a_bootable_disk(self):
+        state = self._vm_unavailable(
+            envspec.EnvironmentRequest(backend="vm", image="debian:13-slim"))
+        if self.vm.QemuDriver().available()[0]:
+            self.assertIn("not a file on this machine", state.detail)
 
     def test_a_vm_without_anything_bootable_is_unavailable(self):
-        state = Orchestrator().available(envspec.EnvironmentRequest(backend="vm"))
-        self.assertEqual(state.action, envspec.UNAVAILABLE)
-        self.assertIn("disk image", state.detail)
+        state = self._vm_unavailable(envspec.EnvironmentRequest(backend="vm"))
+        if self.vm.QemuDriver().available()[0]:
+            self.assertIn("disk image", state.detail)
 
 
 # --- utilities --------------------------------------------------------------
