@@ -1,0 +1,55 @@
+# Package caches for lazy-bootstrap.
+#
+#   docker compose -f ci/cache/compose.yml up -d     (podman compose works too)
+#   ./lazy-bootstrap rebuild debian:13 --package-cache http://127.0.0.1:3142
+#
+# Both services are optional and independent: run the one your distro needs, or
+# both. Nothing in a rebuild requires them - they remove repeated downloads,
+# they are not part of the build's correctness.
+#
+# The volumes are named on purpose. A cache on a bind mount inherits the host's
+# uid layout and tends to end up unwritable inside the container; a named
+# volume is the one arrangement that behaves the same on Docker and Podman,
+# rootful and rootless.
+
+name: lazy-bootstrap-cache
+
+services:
+  # Debian and Ubuntu. Speaks apt's semantics, so debs are kept and indexes
+  # are not.
+  apt-cache:
+    build:
+      context: .
+      dockerfile: Dockerfile.apt-cacher-ng
+    image: lazy-bootstrap/apt-cache:latest
+    container_name: lb-apt-cache
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3142:3142"     # loopback only: this is not an open relay
+    volumes:
+      - apt-cache-data:/var/cache/apt-cacher-ng
+    environment:
+      # Set when the cacher itself has no direct route out, e.g.
+      # LB_UPSTREAM_PROXY=http://127.0.0.1:42571
+      LB_UPSTREAM_PROXY: "${LB_UPSTREAM_PROXY:-}"
+    # A MITM egress proxy's CA, when there is one. Harmless if absent.
+    # volumes:
+    #   - /root/.ccr/ca-bundle.crt:/lb-ca.crt:ro
+
+  # Alpine packages and source tarballs, plus Debian if you would rather run
+  # one service than two.
+  http-cache:
+    build:
+      context: .
+      dockerfile: Dockerfile.http-cache
+    image: lazy-bootstrap/http-cache:latest
+    container_name: lb-http-cache
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - http-cache-data:/var/cache/lb-http
+
+volumes:
+  apt-cache-data:
+  http-cache-data:

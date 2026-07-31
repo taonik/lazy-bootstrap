@@ -1,0 +1,67 @@
+# A package cache for Debian and Ubuntu rebuilds.
+#
+# Why a purpose-built cacher and not a plain HTTP proxy: apt-cacher-ng knows
+# which apt files are immutable and which are not. A .deb at a given version
+# never changes, so it can be held forever; InRelease and Packages change
+# constantly and serving a stale one breaks the run in a way that looks like a
+# corrupt archive. A generic cache has to pick one policy for both and gets one
+# of them wrong.
+#
+# Rebuilding 100 packages means 100 environments each installing the same
+# dh-* and build-essential set. That is the traffic this removes.
+
+FROM debian:13-slim
+
+# ca-certificates matters: the upstream leg is https (see the Remap lines
+# below), and the base image does not ship a CA bundle.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends apt-cacher-ng ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Upstreams are https on purpose. Plain http gets no encryption and, behind an
+# egress proxy that only forwards CONNECT, does not get through at all.
+RUN set -eu; \
+    conf=/etc/apt-cacher-ng/acng.conf; \
+    { \
+      echo 'CacheDir: /var/cache/apt-cacher-ng'; \
+      echo 'LogDir: /var/log/apt-cacher-ng'; \
+      echo 'Port: 3142'; \
+      echo 'BindAddress: 0.0.0.0'; \
+      echo 'Remap-debrep: file:deb_mirror*.gz /debian ; https://deb.debian.org/debian'; \
+      echo 'Remap-debsec: file:debsec_mirror*.gz /debian-security ; https://deb.debian.org/debian-security'; \
+      echo 'Remap-ubuntu: file:ubuntu_mirror*.gz /ubuntu ; https://archive.ubuntu.com/ubuntu'; \
+      echo 'PassThroughPattern: .*'; \
+      echo 'VerboseLog: 0'; \
+      echo 'ExThreshold: 30'; \
+    } > "$conf"
+
+# LB_UPSTREAM_PROXY lets the cacher itself sit behind an egress proxy - the
+# case in sandboxed CI, where nothing reaches the internet directly.
+COPY <<'ENTRY' /usr/local/bin/entrypoint.sh
+#!/bin/sh
+set -eu
+conf=/etc/apt-cacher-ng/acng.conf
+if [ -n "${LB_UPSTREAM_PROXY:-}" ]; then
+    grep -q '^Proxy:' "$conf" || echo "Proxy: ${LB_UPSTREAM_PROXY}" >> "$conf"
+    echo "upstream proxy: ${LB_UPSTREAM_PROXY}"
+fi
+# A CA bundle mounted by the caller wins over the image's, so a MITM egress
+# proxy can be trusted without rebuilding this image.
+if [ -f /lb-ca.crt ]; then
+    cat /lb-ca.crt >> /etc/ssl/certs/ca-certificates.crt || true
+fi
+mkdir -p /var/cache/apt-cacher-ng /var/log/apt-cacher-ng
+chown -R apt-cacher-ng:apt-cacher-ng /var/cache/apt-cacher-ng /var/log/apt-cacher-ng 2>/dev/null || true
+exec /usr/sbin/apt-cacher-ng -c /etc/apt-cacher-ng ForeGround=1
+ENTRY
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+VOLUME /var/cache/apt-cacher-ng
+EXPOSE 3142
+
+# Asking for the root page is enough: it is served by the same thread pool that
+# serves packages, so a hang shows up here before a build waits on it.
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD sh -c 'wget -q -O /dev/null http://127.0.0.1:3142/acng-report.html || exit 1'
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
