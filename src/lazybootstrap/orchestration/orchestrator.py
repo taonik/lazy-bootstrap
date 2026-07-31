@@ -207,6 +207,7 @@ class Orchestrator:
             if proxy_mod.install_ca(handle.executor, settings, unit=request.name):
                 handle.executor.spec.env.update(proxy_mod.ca_env())
                 log.info("egress proxy in use: CA installed in %s", request.name)
+                proxy_mod.prefer_https_sources(handle.executor, settings, unit=request.name)
         self._open.append(handle)
         return handle
 

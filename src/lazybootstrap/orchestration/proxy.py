@@ -154,5 +154,36 @@ exit 0
     return result.ok
 
 
-__all__ = ["ProxySettings", "detect", "install_ca", "CA_PATH",
+def prefer_https_sources(executor, settings: ProxySettings, unit: str = "") -> bool:
+    """Point the distro's package sources at https when a proxy is in the way.
+
+    An egress proxy typically forwards CONNECT (https) and nothing else, so a
+    source list in plain http bypasses it and dies against the network policy
+    instead - as a 403, which reads like "this package does not exist" rather
+    than "your traffic never went through the proxy". Every Debian and Alpine
+    mirror worth using serves https, and the CA is already installed above, so
+    switching is safe and is what makes the archive reachable at all.
+    """
+    if not settings.active:
+        return False
+    script = """
+changed=""
+for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+         /etc/apt/sources.list.d/*.sources /etc/apk/repositories; do
+    [ -f "$f" ] || continue
+    grep -q 'http://' "$f" 2>/dev/null || continue
+    sed -i 's|http://|https://|g' "$f" && changed="$changed $f"
+done
+[ -n "$changed" ] && echo "switched to https:$changed"
+exit 0
+"""
+    result = executor.run(script, title="package sources over https",
+                          unit=unit, step_prefix="prepare")
+    if result.ok and "switched to https:" in result.output:
+        log.info("egress proxy in use: package sources switched to https (%s)",
+                 result.output.split("switched to https:")[1].strip())
+    return result.ok
+
+
+__all__ = ["ProxySettings", "detect", "install_ca", "prefer_https_sources", "CA_PATH",
            "CONTAINER_HOST", "DOCKER_HOST"]
