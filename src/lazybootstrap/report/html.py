@@ -10,7 +10,7 @@ from __future__ import annotations
 import html
 import json
 
-from .. import util
+from ..orchestration import util
 from ..model import STATUS_ORDER, RunReport
 from .compare import FIX, REGRESSION, Comparison
 

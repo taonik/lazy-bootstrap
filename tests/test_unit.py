@@ -16,7 +16,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lazybootstrap import images, planner, rootfs, sysdeps, util  # noqa: E402
+from lazybootstrap import planner, sysdeps  # noqa: E402
+from lazybootstrap.orchestration import images, rootfs, util  # noqa: E402
+from lazybootstrap.orchestration import spec as envspec  # noqa: E402
+from lazybootstrap.orchestration.orchestrator import Orchestrator  # noqa: E402
 from lazybootstrap.config import RunConfig, ToolchainConfig, from_mapping  # noqa: E402
 from lazybootstrap.model import (Attempt, PackageRef, PackageResult,  # noqa: E402
                                  RunReport, Status, StepLog)
@@ -419,6 +422,86 @@ class TestFlavours(unittest.TestCase):
         self.assertEqual(SaveTarget.parse("").kind, "")
         with self.assertRaises(WorkerError):
             SaveTarget.parse("floppy:/dev/fd0")
+
+
+# --- the orchestration seam -------------------------------------------------
+
+
+class TestOrchestrationIsIndependent(unittest.TestCase):
+    """The package must stay liftable into a repository of its own (D-27)."""
+
+    def test_it_never_imports_the_domain(self):
+        root = Path(__file__).resolve().parents[1] / "src" / "lazybootstrap"
+        offenders = []
+        domain = {"engine", "distros", "toolchains", "planner", "report", "worker",
+                  "model", "config", "sysdeps", "net"}
+        for path in (root / "orchestration").rglob("*.py"):
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line.startswith(("import ", "from ")):
+                    continue
+                for name in domain:
+                    if f"from ..{name}" in line or f"import ..{name}" in line \
+                            or f"lazybootstrap.{name}" in line:
+                        offenders.append(f"{path.name}: {line}")
+        self.assertEqual(offenders, [], "orchestration must not depend on the domain")
+
+    def test_public_surface_is_stable(self):
+        from lazybootstrap import orchestration
+
+        for name in ("Orchestrator", "EnvironmentRequest", "EnvironmentHandle",
+                     "Availability", "OrchestrationError", "AUTO", "REQUIRE"):
+            self.assertTrue(hasattr(orchestration, name), f"missing {name}")
+
+
+class TestAcquisitionPolicy(unittest.TestCase):
+    def _request(self, **kw):
+        return envspec.EnvironmentRequest(**kw)
+
+    def test_host_is_always_satisfied(self):
+        state = Orchestrator().available(self._request(backend="host"))
+        self.assertTrue(state.satisfied)
+        self.assertEqual(state.action, envspec.NONE)
+
+    def test_require_forbids_pulling(self):
+        request = self._request(backend="podman", image="example.invalid/nope:1",
+                                acquire=envspec.REQUIRE)
+        state = Orchestrator().available(request)
+        self.assertFalse(state.satisfied)
+        self.assertFalse(state.allowed)
+        self.assertFalse(state.ok)
+        self.assertIn("forbids", state.summary())
+
+    def test_auto_allows_pulling(self):
+        request = self._request(backend="podman", image="example.invalid/nope:1",
+                                acquire=envspec.AUTO)
+        state = Orchestrator().available(request)
+        self.assertTrue(state.allowed)
+        self.assertTrue(state.ok)
+        self.assertEqual(state.action, envspec.PULL)
+
+    def test_unknown_backend_is_unavailable_not_a_crash(self):
+        state = Orchestrator().available(self._request(backend="teleporter"))
+        self.assertEqual(state.action, envspec.UNAVAILABLE)
+        self.assertFalse(state.ok)
+
+    def test_dir_rootfs_without_prepare_is_unavailable(self):
+        request = self._request(backend="chroot", rootfs="dir:/nonexistent-lb")
+        self.assertEqual(Orchestrator().available(request).action, envspec.UNAVAILABLE)
+
+    def test_dir_rootfs_with_prepare_can_be_materialised(self):
+        request = self._request(backend="chroot", rootfs="dir:/nonexistent-lb",
+                                rootfs_prepare="true")
+        state = Orchestrator().available(request)
+        self.assertEqual(state.action, envspec.MATERIALISE)
+        self.assertTrue(state.allowed)
+
+    def test_availability_is_side_effect_free(self):
+        target = Path("/nonexistent-lazy-bootstrap-should-not-appear")
+        request = self._request(backend="chroot", rootfs="hostfs:copy",
+                                rootfs_path=str(target))
+        Orchestrator().available(request)
+        self.assertFalse(target.exists())
 
 
 # --- utilities --------------------------------------------------------------

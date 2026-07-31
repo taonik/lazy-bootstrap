@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..executors.base import Executor
+from ..orchestration.executors.base import Executor
 from .alpine import AlpineDistro
 from .base import BuildContext, Distro, SourceTree
 from .debian import DebianDistro

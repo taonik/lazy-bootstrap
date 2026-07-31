@@ -100,6 +100,9 @@ class RunConfig:
     rootfs_prepare: str = ""                # shell command that populates a dir: rootfs
     #: build directory: "" = the backend default, a path, or "temp"
     workdir: str = ""
+    #: what the orchestrator may do to obtain the environment (D-27):
+    #: auto (pull if missing) | require (never fetch) | download | build
+    acquire: str = "auto"
     engine: str = "podman"                  # oci backend: podman | docker
     grouping: str = "all"                   # all | package | group
     group_size: int = 20                    # grouping=group

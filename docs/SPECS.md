@@ -327,6 +327,74 @@ ricompilazione** devono poter girare su una qualunque delle classi supportate.
   rendere il rootfs inaccettabile per un altro. È il motivo per cui i backend toccano
   il minimo indispensabile.
 
+### D-27 — L'orchestrazione dell'ambiente è un componente indipendente
+Requisito: la parte che gestisce gli ambienti di esecuzione diventerà **una repo
+separata** e farà da interfaccia per altri sistemi e script.
+
+**La domanda posta:** la pipeline è (1) genera/verifica le immagini builder e poi
+(2) esegue la ricompilazione nell'ambiente scelto? Oppure il punto (1) non è una
+fase separata, perché lo script usa l'interfaccia per tutto e al massimo *interroga*
+l'orchestratore sulla disponibilità, con un default in caso di assenza
+(`--download-image` / `--no-download-image`)?
+
+**Risposta: la seconda.** Il punto (1) non è una fase.
+
+* **Alternative**
+  1. Due fasi esplicite: prima si costruiscono le immagini, poi si ricompila.
+  2. Fase unica: il job **dichiara il fabbisogno**, l'orchestratore **risolve**
+     (già disponibile? scaricare? costruire?) sotto una **policy** scelta dal
+     chiamante ma applicata dall'orchestratore.
+* **Presa: (2).**
+* **Perché** — Con (1) la conoscenza di "quali immagini servono" finirebbe in due
+  posti: nello script che le pre-costruisce e nel job che le usa. Divergerebbero
+  esattamente quando cambia una toolchain. Peggio: il chiamante dovrebbe
+  implementare la logica di acquisizione (pull? unpack? build?) che è precisamente
+  il mestiere dell'orchestratore. Con (2) il job dice *cosa gli serve* e *cosa è
+  disposto a lasciar fare* (`acquire`), mai *come*.
+* **Chi decide cosa serve** — il **dominio**, non l'orchestratore: un flavour
+  (`ci/flavours.toml`) è distro × toolchain, e da lì discendono immagine base e
+  dipendenze. L'orchestratore non sa cosa sia una toolchain e non deve saperlo.
+  L'orchestratore risponde solo a "questo ambiente, ce l'ho? cosa costa averlo?".
+
+#### Il contratto
+```
+probe()               cosa sa fare questa macchina
+available(request)    potresti darmi questo, e cosa costerebbe?   (nessun effetto)
+open(request)         dammelo (acquisendolo se la policy lo permette)
+```
+`available()` è **senza effetti collaterali** — è l'"interrogare l'orchestratore"
+della domanda — e c'è un test che lo verifica. `open()` esegue ciò che
+`available()` aveva previsto.
+
+#### La policy di acquisizione
+| `--acquire` | l'orchestratore può |
+|---|---|
+| `require` (`--no-download-image`) | solo usare ciò che è già presente |
+| `download` (`--download-image`) | scaricare da un registry |
+| `build` | costruire in locale da una ricetta |
+| `auto` (default) | scaricare se manca; non costruire |
+
+Il pre-riscaldamento resta **possibile ma facoltativo**: `lazy-bootstrap env ensure`
+acquisisce in anticipo (utile in CI per separare "scarica" da "compila" nei tempi
+di job), ma nessun comando lo richiede.
+
+#### Confine e regola
+`src/lazybootstrap/orchestration/` non importa **nulla** dal resto del progetto —
+verificato da un test, non solo per convenzione. Ciò che di volta in volta sembra
+servirgli dal dominio va passato dentro `EnvironmentRequest`. Il giorno dello
+scorporo, il pacchetto si sposta così com'è e questa repo lo consuma come
+dipendenza.
+
+**Anche `host` passa dall'interfaccia**, pur non avendo nulla da acquisire.
+Trattarlo come caso speciale creerebbe due percorsi di codice che divergerebbero;
+così è semplicemente il provider banale.
+
+**Cosa resta al progetto vero e proprio**, come da intuizione nella domanda: la
+conoscenza di dominio (inventario, sorgenti, iniezione della toolchain, build,
+report) più le chiamate all'interfaccia. Non è però "un set minimo di script per
+l'host + invocazioni all'orchestratore per il resto": il dominio non distingue
+l'host dagli altri, perché non ne ha motivo.
+
 ---
 
 ## 5. Reporting

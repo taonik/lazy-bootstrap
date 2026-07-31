@@ -138,7 +138,7 @@ def _classify(base: Status | None, other: Status | None) -> str:
 
 
 def render_text(comparison: Comparison, limit: int = 60) -> str:
-    from .. import util
+    from ..orchestration import util
 
     out: list[str] = ["=" * 78, "lazy-bootstrap comparison", "=" * 78]
     out += comparison.summary_lines()

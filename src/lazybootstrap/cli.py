@@ -17,14 +17,15 @@ from pathlib import Path
 
 from . import config as config_mod
 from . import engine as engine_mod
-from . import logs, report, util
+from . import report
+from .orchestration import logs, util
 from .config import RunConfig, ToolchainConfig, default_toolchain_matrix
-from .executors import probe as probe_backends
+from .orchestration.executors import probe as probe_backends
 from .model import RunReport, Status
 from .net import Fetcher
 from .planner import plan as make_plan
 from .report.compare import compare as compare_runs
-from .trace import Tracer, level_from_env
+from .orchestration.trace import Tracer, level_from_env
 
 log = logs.get("cli")
 
@@ -77,6 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=list(report.FORMATS), help="also print this format to stdout")
     rebuild.add_argument("--dry-run", action="store_true",
                          help="plan and print the units, build nothing")
+
+    # -- env ---------------------------------------------------------------
+    env = sub.add_parser("env", help="query the execution-environment orchestrator")
+    # `action` first: the optional image positional would otherwise swallow it.
+    env.add_argument("action", choices=["probe", "available", "ensure"],
+                     help="probe: what this machine can do; available: could I get "
+                          "this environment, and at what cost (no side effects); "
+                          "ensure: get it now and release it")
+    _add_target_args(env)
+    env.add_argument("--json", action="store_true")
 
     # -- build-worker ------------------------------------------------------
     worker = sub.add_parser("build-worker",
@@ -136,6 +147,14 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
                         help="apt: 'debian=http://host/debian trixie main'; apk: 'alpine=<aports branch>'")
     parser.add_argument("--image-setup", action="append", default=None, metavar="CMD",
                         help="shell command run once on the image before anything else")
+    parser.add_argument("--acquire", choices=["auto", "require", "download", "build"],
+                        help="what the orchestrator may do to obtain the environment: "
+                             "auto (pull if missing, the default), require (never fetch), "
+                             "download, build")
+    parser.add_argument("--download-image", dest="acquire", action="store_const",
+                        const="download", help="alias for --acquire download")
+    parser.add_argument("--no-download-image", dest="acquire", action="store_const",
+                        const="require", help="alias for --acquire require")
     parser.add_argument("--system-deps", choices=["off", "target", "host"],
                         help="install the packages declared in ci/system-deps/ "
                              "(default: target; 'host' is required before anything "
@@ -163,7 +182,8 @@ def resolve_config(args: argparse.Namespace) -> RunConfig:
     for name in ("image", "distro", "backend", "engine", "grouping", "group_size",
                  "timeout", "build_jobs", "limit", "include", "exclude",
                  "default_toolchain", "fallback_toolchain", "preflight_package",
-                 "system_deps", "rootfs", "rootfs_path", "rootfs_prepare", "workdir"):
+                 "system_deps", "rootfs", "rootfs_path", "rootfs_prepare", "workdir",
+                 "acquire"):
         value = getattr(args, name, None)
         if value not in (None, [], ""):
             overrides[name] = value
@@ -377,6 +397,58 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_env(args: argparse.Namespace) -> int:
+    """The orchestrator, exposed on its own: query it, or pre-warm an environment.
+
+    Pre-warming is an optimisation, never a prerequisite - `rebuild` acquires
+    what it needs by itself, under the same policy (docs/SPECS.md D-27).
+    """
+    from .orchestration import Orchestrator
+
+    cfg = resolve_config(args)
+    orchestrator = Orchestrator(cfg.cache_dir, make_tracer(args))
+
+    if args.action == "probe":
+        facts = orchestrator.probe()
+        if args.json:
+            print(json.dumps(facts, indent=2))
+            return 0
+        for name, info in facts.items():
+            mark = "ok " if info.get("available") == "yes" else "-- "
+            print(f"  [{mark}] {name:<12} {info.get('detail', '')}")
+        return 0
+
+    engine = engine_mod.Engine(cfg, make_tracer(args))
+    request = engine.request("lb-env")
+    state = orchestrator.available(request)
+
+    if args.action == "available":
+        if args.json:
+            print(json.dumps({"request": request.describe(), "satisfied": state.satisfied,
+                              "action": state.action, "allowed": state.allowed,
+                              "where": state.where, "detail": state.detail,
+                              "acquire": request.acquire}, indent=2))
+        else:
+            print(f"request : {request.describe()}")
+            print(f"policy  : --acquire {request.acquire}")
+            print(f"status  : {state.summary()}")
+        return 0 if state.ok else 1
+
+    # ensure: acquire it now, prove it starts, hand it straight back.
+    handle = orchestrator.open(request)
+    try:
+        facts = handle.describe()
+        if args.json:
+            print(json.dumps(facts, indent=2))
+        else:
+            for key, value in facts.items():
+                if value:
+                    print(f"  {key:<12} {value}")
+        return 0
+    finally:
+        orchestrator.close(handle)
+
+
 def cmd_build_worker(args: argparse.Namespace) -> int:
     from . import worker as worker_mod
 
@@ -473,6 +545,7 @@ def _emit(text: str, output: str | None) -> None:
 
 COMMANDS = {
     "doctor": cmd_doctor,
+    "env": lambda args: cmd_env(args),
     "build-worker": lambda args: cmd_build_worker(args),
     "inventory": cmd_inventory,
     "rebuild": cmd_rebuild,

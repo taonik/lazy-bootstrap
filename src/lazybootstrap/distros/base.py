@@ -16,7 +16,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from ..executors.base import CommandResult, Executor
+from ..orchestration.executors.base import CommandResult, Executor
 from ..model import PackageRef, StepLog
 
 
@@ -110,7 +110,7 @@ class Distro(ABC):
     @staticmethod
     def step(name: str, result: CommandResult, limit: int = 4000,
              fatal: bool = True) -> StepLog:
-        from .. import util
+        from ..orchestration import util
 
         return StepLog(
             name=name,

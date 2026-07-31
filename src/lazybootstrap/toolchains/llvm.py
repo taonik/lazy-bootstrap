@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import re
 
-from ..executors.base import Executor
-from ..logs import get
+from ..orchestration.executors.base import Executor
+from ..orchestration.logs import get
 from ..net import DownloadError
-from .base import Install, Toolchain, ToolchainError, unpack_tarball
+from .base import Install, Toolchain, ToolchainError, provisioning_hint, unpack_tarball
 from .gcc import _installer, _resolve, _version_of
 
 log = get("tc.llvm")
@@ -34,6 +34,11 @@ _LEGACY_ASSETS = [
 
 class LlvmToolchain(Toolchain):
     kind = "llvm"
+    # dh_dwz cannot read clang's DWARF and aborts the build *after* a successful
+    # compile and link. `nostrip` skips dh_strip/dh_dwz: they are packaging
+    # steps, and reporting their failure as "clang cannot build this package"
+    # would be exactly the distortion this tool exists to avoid (D-23).
+    default_deb_build_options = ["nostrip"]
     sysdeps_component = "llvm"
 
     def provision(self, executor: Executor, distro_id: str, facts: dict[str, str],
@@ -76,6 +81,9 @@ class LlvmToolchain(Toolchain):
                               env={"DEBIAN_FRONTEND": "noninteractive"},
                               timeout=1800, unit=unit, step_prefix="toolchain")
         if not result.ok:
+            hint = provisioning_hint(result.output, distro_id)
+            if hint:
+                raise ToolchainError(hint)
             log.debug("distro clang install failed: %s", result.output.strip()[-300:])
             return None
         cc = _resolve(executor, [f"clang-{major}"] if major else [], "clang", unit=unit)

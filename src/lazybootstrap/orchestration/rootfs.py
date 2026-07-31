@@ -126,6 +126,7 @@ class Rootfs:
             subprocess.run(argv, capture_output=True, text=True)
         self._cleanup.clear()
         if self._remove and self.path.exists():
+            util.unmount_below(self.path)   # anything a backend left behind
             log.debug("removing temporary rootfs %s", self.path)
             shutil.rmtree(self.path, ignore_errors=True)
 

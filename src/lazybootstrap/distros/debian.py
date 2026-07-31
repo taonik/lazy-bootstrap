@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 
-from ..executors.base import CommandResult, Executor
-from ..logs import get
+from ..orchestration.executors.base import CommandResult, Executor
+from ..orchestration.logs import get
 from ..model import PackageRef, StepLog
 from .base import BuildContext, Distro, SourceTree
 

@@ -125,6 +125,47 @@ Statuses are distinguished on purpose: `failed` (the code did not build) is not
 the same as `blocked` (the network would not let us fetch it) or `nosource` (no
 source package exists). Conflating them would poison a toolchain comparison.
 
+## The orchestration layer
+
+`src/lazybootstrap/orchestration/` is independent of everything else here — it
+knows how to obtain and run an environment and nothing about rebuilding
+packages. It is written to become a repository of its own, and a test enforces
+that it never imports the rest of the project.
+
+```python
+from lazybootstrap.orchestration import Orchestrator, EnvironmentRequest
+
+orch = Orchestrator()
+req = EnvironmentRequest(backend="chroot", rootfs="hostfs:overlay", acquire="auto")
+
+print(orch.available(req).summary())   # no side effects
+handle = orch.open(req)                # acquires it, if the policy allows
+handle.executor.run("gcc --version")
+orch.close(handle)
+```
+
+A caller says *what it needs* and *what the orchestrator may do to get there* —
+never *how*. There is no separate "build the images first" phase: `rebuild`
+acquires what it needs under the same policy.
+
+| `--acquire` | the orchestrator may |
+|---|---|
+| `require` (`--no-download-image`) | only use what is already present |
+| `download` (`--download-image`) | pull from a registry |
+| `build` | build locally from a recipe |
+| `auto` (default) | pull if missing; not build |
+
+The same thing from the shell:
+
+```console
+$ ./lazy-bootstrap env probe                       # what can this machine do
+$ ./lazy-bootstrap env available debian:13-slim --backend podman
+request : podman:debian:13-slim
+policy  : --acquire auto
+status  : missing, would pull: mirror.gcr.io/library/debian:13-slim is not in the local podman store
+$ ./lazy-bootstrap env ensure debian:13-slim       # pre-warm (optional)
+```
+
 ## Worker environments
 
 A *worker* is an environment that already has the build machinery and a

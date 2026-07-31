@@ -12,8 +12,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 from ..config import ToolchainConfig
-from ..executors.base import Executor
-from ..logs import get
+from ..orchestration.executors.base import Executor
+from ..orchestration.logs import get
 from ..model import ToolchainReport
 
 log = get("toolchain")
@@ -28,6 +28,38 @@ CXX_ALIASES = ["c++", "g++", "clang++", "x86_64-linux-gnu-g++", "x86_64-alpine-l
 
 class ToolchainError(RuntimeError):
     pass
+
+
+#: Substrings that mean "the network refused", not "this does not exist".
+#: Shared with engine._classify_fetch_failure so both halves agree (D-20).
+NETWORK_MARKERS = (
+    "Host not in allowlist",
+    "Temporary failure resolving",
+    "Could not resolve host",
+    "Connection refused",
+    "403  Forbidden",
+    "Failed to fetch",
+    "Unable to connect",
+    "network is unreachable",
+    "Could not connect",
+    "ERROR: unable to select packages",
+    "is not signed",
+)
+
+
+def looks_blocked(output: str) -> bool:
+    return any(marker in output for marker in NETWORK_MARKERS)
+
+
+def provisioning_hint(output: str, distro_id: str) -> str:
+    """Turn a package-manager failure into something a human can act on."""
+    if not looks_blocked(output):
+        return ""
+    archive = ("dl-cdn.alpinelinux.org" if distro_id == "alpine"
+               else "deb.debian.org / the image's apt archive")
+    return (f"the package archive is unreachable ({archive}). This is a network "
+            "problem, not a missing package: allow the host, or point the run at a "
+            "reachable one with --source-mirror / --registry-mirror")
 
 
 @dataclass
@@ -51,6 +83,9 @@ class Install:
     #: directories holding a runtime the distro does not package (Fil-C's libpizlo,
     #: an upstream libc++, ...). Drives the dpkg-shlibdeps shim (D-23).
     runtime_libdirs: list[str] = field(default_factory=list)
+    #: DEB_BUILD_OPTIONS keywords this toolchain needs, e.g. "nostrip" because
+    #: dh_dwz cannot read clang's DWARF (D-23).
+    deb_build_options: list[str] = field(default_factory=list)
     shimmed: bool = False
 
 
@@ -90,6 +125,10 @@ class Toolchain(ABC):
     #: Flags this toolchain cannot honour, dropped by the shim unless the run
     #: overrides `drop_flags`. Overridden per driver.
     default_drop_flags: list[str] = []
+
+    #: DEB_BUILD_OPTIONS this toolchain needs on the Debian family, because a
+    #: packaging step - not a compiler step - cannot cope with its output.
+    default_deb_build_options: list[str] = []
 
     def drop_flags(self, install: Install) -> list[str]:
         configured = self.config.drop_flags
@@ -146,7 +185,11 @@ class Toolchain(ABC):
             env["DEB_CXXFLAGS_APPEND"] = cxxflags
         if ldflags:
             env["DEB_LDFLAGS_APPEND"] = ldflags
-        env.update(install.env)
+        options = [*install.deb_build_options, *self.default_deb_build_options]
+        if options:
+            existing = install.env.get("DEB_BUILD_OPTIONS", "").split()
+            env["DEB_BUILD_OPTIONS"] = " ".join(dict.fromkeys([*existing, *options]))
+        env.update({k: v for k, v in install.env.items() if k != "DEB_BUILD_OPTIONS"})
         env.update(self.config.env)
         return env
 

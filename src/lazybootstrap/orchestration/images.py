@@ -115,6 +115,11 @@ class ImageStore:
             log.debug("rootfs cached: %s", dest)
             return dest
         if dest.exists():
+            # An interrupted run can leave bind mounts inside; releasing them
+            # first turns "Device or resource busy" into a non-event.
+            released = util.unmount_below(dest)
+            if released:
+                log.info("released %d stale mount(s) under %s", len(released), dest)
             self._run(["rm", "-rf", str(dest)], "clean rootfs")
         util.ensure_dir(dest)
 

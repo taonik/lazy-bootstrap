@@ -8,9 +8,9 @@ a download here: it is a multi-hour job that belongs in a prepared CI image.
 
 from __future__ import annotations
 
-from ..executors.base import Executor
-from ..logs import get
-from .base import Install, Toolchain, ToolchainError
+from ..orchestration.executors.base import Executor
+from ..orchestration.logs import get
+from .base import Install, Toolchain, ToolchainError, provisioning_hint
 
 log = get("tc.gcc")
 
@@ -23,24 +23,30 @@ class GccToolchain(Toolchain):
                   fetcher, unit: str = "", sysdeps=None) -> Install:
         notes = self.ensure_sysdeps(sysdeps)
         version = self.config.version
+        errors: list[str] = []
         for strategy in self.config.provision:
-            if strategy == "distro":
-                install = self._from_distro(executor, distro_id, version, unit)
-            elif strategy == "preinstalled":
-                install = self._preinstalled(executor, version, unit)
-            elif strategy == "source":
-                raise ToolchainError(
-                    "building gcc from source is not wired up; use a prepared CI image "
-                    "(see ci/images/) or provision=distro"
-                )
-            else:
-                continue
+            try:
+                if strategy == "distro":
+                    install = self._from_distro(executor, distro_id, version, unit)
+                elif strategy == "preinstalled":
+                    install = self._preinstalled(executor, version, unit)
+                elif strategy == "source":
+                    raise ToolchainError(
+                        "building gcc from source is not wired up; use a prepared CI image "
+                        "(see ci/images/) or provision=distro"
+                    )
+                else:
+                    continue
+            except ToolchainError as exc:
+                errors.append(f"{strategy}: {exc}")
+                install = None
             if install:
                 install.notes.extend(notes)
                 self.install_shim(executor, install, unit)
                 return install
+        detail = ("\n  " + "\n  ".join(errors)) if errors else ""
         raise ToolchainError(
-            f"could not provision {self.id} (tried: {', '.join(self.config.provision)})"
+            f"could not provision {self.id} (tried: {', '.join(self.config.provision)}){detail}"
         )
 
     # -- strategies ---------------------------------------------------------
@@ -53,8 +59,11 @@ class GccToolchain(Toolchain):
                               env={"DEBIAN_FRONTEND": "noninteractive"},
                               timeout=1800, unit=unit, step_prefix="toolchain")
         if not result.ok:
+            hint = provisioning_hint(result.output, distro_id)
             log.warning("distro install of %s failed: %s", self.id,
-                        result.output.strip()[-400:])
+                        hint or result.output.strip()[-400:])
+            if hint:
+                raise ToolchainError(hint)
             return None
         cc = _resolve(executor, [f"gcc-{version}"] if version else [], "gcc", "cc", unit=unit)
         cxx = _resolve(executor, [f"g++-{version}"] if version else [], "g++", "c++", unit=unit)

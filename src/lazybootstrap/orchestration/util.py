@@ -121,6 +121,37 @@ def dir_size(path: str | os.PathLike[str]) -> int:
 # --- misc -------------------------------------------------------------------
 
 
+def unmount_below(path: str | os.PathLike[str]) -> list[str]:
+    """Lazily unmount everything under `path`, deepest first.
+
+    A rootfs directory can carry bind mounts (the resolver, /proc, a bound
+    cache) and an interrupted run leaves them behind. Without this, the next run
+    fails on "Device or resource busy" while trying to refresh the rootfs -
+    which is a confusing way to say "someone pressed Ctrl-C last time".
+    """
+    import subprocess
+
+    target = str(Path(path).resolve())
+    try:
+        mounts = Path("/proc/self/mounts").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    points = []
+    for line in mounts.splitlines():
+        fields = line.split()
+        if len(fields) < 2:
+            continue
+        mountpoint = fields[1].replace("\\040", " ")
+        if mountpoint == target or mountpoint.startswith(target.rstrip("/") + "/"):
+            points.append(mountpoint)
+    released = []
+    for mountpoint in sorted(points, key=len, reverse=True):
+        if subprocess.run(["umount", "-l", mountpoint],
+                          capture_output=True, text=True).returncode == 0:
+            released.append(mountpoint)
+    return released
+
+
 def chunked(items: Sequence[Any], size: int) -> Iterable[list[Any]]:
     """Split a sequence into fixed-size chunks (used by the group planner)."""
     if size <= 0:

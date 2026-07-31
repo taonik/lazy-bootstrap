@@ -14,8 +14,8 @@ Fil-C tracks its own version numbers, not LLVM's: 0.681 is clang 20.1.8.
 
 from __future__ import annotations
 
-from ..executors.base import Executor
-from ..logs import get
+from ..orchestration.executors.base import Executor
+from ..orchestration.logs import get
 from ..net import DownloadError
 from .base import Install, Toolchain, ToolchainError, unpack_tarball
 
@@ -36,6 +36,9 @@ class FilcToolchain(Toolchain):
     # `-flto=auto -ffat-lto-objects` makes every link fail (D-22).
     default_drop_flags = ["-flto", "-flto=*", "-ffat-lto-objects",
                           "-fno-fat-lto-objects", "-ffat-lto-objects=*"]
+    # nolto for the same reason; nostrip because debugedit/dh_dwz do not
+    # understand Fil-C's DWARF either (D-23).
+    default_deb_build_options = ["nolto", "nostrip"]
 
     def provision(self, executor: Executor, distro_id: str, facts: dict[str, str],
                   fetcher, unit: str = "", sysdeps=None) -> Install:
@@ -133,7 +136,7 @@ ls -l
             cc=f"{prefix}/build/bin/clang", cxx=f"{prefix}/build/bin/clang++",
             version=f"{version} ({variant}, musl, clang 20.1.8)", prefix=prefix,
             env={"LD_LIBRARY_PATH": f"{prefix}/pizfix/lib64:{prefix}/pizfix/lib",
-                 "FILC_ROOT": prefix, "DEB_BUILD_OPTIONS": "nolto"},
+                 "FILC_ROOT": prefix},
             runtime_libdirs=[f"{prefix}/pizfix/lib", f"{prefix}/pizfix/lib64"],
             notes=notes,
         )
@@ -152,7 +155,7 @@ ls -l
         import subprocess
         from pathlib import Path
 
-        from .. import util
+        from ..orchestration import util
 
         # Step 1 (host side): pull the inner payload out of the wrapper, once.
         staging = util.ensure_dir(Path(fetcher.cache_dir).parent / "filc" / f"optfil-{version}")
@@ -212,7 +215,7 @@ ls -l
             toolchain_id=self.id, kind=self.kind, source="binary",
             cc=cc, cxx=cxx, version=f"{version} ({variant}, glibc 2.40, clang 20.1.8)",
             prefix="/opt/fil",
-            env={"FILC_ROOT": "/opt/fil", "DEB_BUILD_OPTIONS": "nolto"},
+            env={"FILC_ROOT": "/opt/fil"},
             runtime_libdirs=["/opt/fil/lib", "/opt/fil/lib64"], notes=notes,
         )
 

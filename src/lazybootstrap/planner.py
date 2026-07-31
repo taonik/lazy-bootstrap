@@ -17,7 +17,7 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass, field
 
-from . import util
+from .orchestration import util
 from .config import RunConfig
 from .model import PackageRef
 

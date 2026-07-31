@@ -17,18 +17,20 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import distros, rootfs as rootfs_mod, sysdeps as sysdeps_mod, toolchains, util
+from . import distros, sysdeps as sysdeps_mod, toolchains
+from .orchestration import rootfs as rootfs_mod, util
+from .orchestration import EnvironmentRequest, Orchestrator
 from .config import RunConfig, ToolchainConfig
 from .distros.base import BuildContext, Distro
-from .executors import NEEDS_ROOTFS, ExecutorSpec, create
-from .executors.base import Executor
-from .images import ImageStore
-from .logs import get
+from .orchestration.executors import NEEDS_ROOTFS, ExecutorSpec, create
+from .orchestration.executors.base import Executor
+from .orchestration.images import ImageStore
+from .orchestration.logs import get
 from .model import Attempt, PackageResult, RunReport, Status, StepLog, ToolchainReport
 from .net import DownloadError, Fetcher
 from .planner import BuildUnit, Plan, plan as make_plan
 from .toolchains.base import Install, ToolchainError
-from .trace import Tracer
+from .orchestration.trace import Tracer
 
 log = get("engine")
 
@@ -47,13 +49,15 @@ class Environment:
     distro: Distro
     facts: dict[str, str]
     sysdeps: sysdeps_mod.SysDeps | None = None
-    rootfs: object | None = None
+    handle: object | None = None
+    orchestrator: object | None = None
 
     def close(self) -> None:
-        """Shut the environment down and undo whatever the rootfs needed."""
-        self.executor.close()
-        if self.rootfs is not None:
-            self.rootfs.release()
+        """Hand the environment back; the orchestrator owns its teardown."""
+        if self.orchestrator is not None and self.handle is not None:
+            self.orchestrator.close(self.handle)
+        else:
+            self.executor.close()
 
 
 class Engine:
@@ -63,43 +67,37 @@ class Engine:
         self.fetcher = Fetcher(config.cache_dir, self.tracer)
         self.images = ImageStore(config.cache_dir, config.engine,
                                  config.registry_mirrors, self.tracer)
-        self.rootfs = rootfs_mod.RootfsProvider(config.cache_dir, self.images, self.tracer)
+        # Everything about *where* a command runs goes through the orchestrator;
+        # this module only knows what it needs (docs/SPECS.md D-27).
+        self.orchestrator = Orchestrator(config.cache_dir, self.tracer)
         # Host workdir policy: default, explicit, or throwaway (D-25).
         self.workdir, self._workdir_temp = rootfs_mod.resolve_workdir(config.workdir, WORKDIR)
         self._open_rootfs: list[rootfs_mod.Rootfs] = []
 
     # -- environment --------------------------------------------------------
 
-    def open_environment(self, name: str, network: bool = True) -> Environment:
-        """Start a backend session on the configured image and identify it."""
-        spec = ExecutorSpec(
-            kind=self.config.backend,
+    def request(self, name: str, network: bool = True) -> EnvironmentRequest:
+        """Describe the environment this run needs. No acquisition logic here."""
+        return EnvironmentRequest(
+            backend=self.config.backend,
             engine=self.config.engine,
+            image=self.config.image,
+            rootfs=self.config.rootfs,
+            rootfs_path=self.config.rootfs_path,
+            rootfs_prepare=self.config.rootfs_prepare,
             workdir=self.workdir,
             network=network and self.config.network != "disabled",
             name=name,
+            acquire=self.config.acquire,
+            registry_mirrors=dict(self.config.registry_mirrors),
+            labels={"tool": "lazy-bootstrap"},
         )
-        # The container backends take an image reference; the isolating backends
-        # (chroot/bwrap/firejail) take a directory, produced by the rootfs
-        # provider; `host` needs neither - it *is* the environment (D-25).
-        materialised = None
-        if self.config.backend in ("oci", "podman", "docker"):
-            spec.image = self.images.pull(self.config.image)
-        elif self.config.backend in NEEDS_ROOTFS:
-            rootfs_spec = rootfs_mod.RootfsSpec.parse(
-                self.config.rootfs or rootfs_mod.IMAGE,
-                image=self.config.image,
-                path=self.config.rootfs_path,
-                prepare=self.config.rootfs_prepare,
-            )
-            log.info("rootfs for %s: %s", name, rootfs_spec.describe())
-            materialised = self.rootfs.materialise(rootfs_spec, name)
-            spec.rootfs = str(materialised.path)
-            self._open_rootfs.append(materialised)
 
-        executor = create(spec, self.tracer)
-        executor.start()
-        executor.mkdir(self.workdir)
+    def open_environment(self, name: str, network: bool = True) -> Environment:
+        """Ask the orchestrator for an environment, then identify what came back."""
+        request = self.request(name, network)
+        handle = self.orchestrator.open(request)
+        executor = handle.executor
 
         # Optional one-shot mutation of the image (the "+libc6-compat" case).
         for command in self.config.image_setup:
@@ -119,7 +117,7 @@ class Engine:
         if not deps.allowed:
             log.info("system dependencies will not be installed (%s)", deps.why_not())
         return Environment(executor=executor, distro=distro, facts=facts, sysdeps=deps,
-                           rootfs=materialised)
+                           handle=handle, orchestrator=self.orchestrator)
 
     # -- inventory ----------------------------------------------------------
 
@@ -215,6 +213,7 @@ class Engine:
             "system_deps": self.config.system_deps,
             "rootfs": self.config.rootfs or ("image" if self.config.backend in NEEDS_ROOTFS else ""),
             "workdir": self.workdir,
+            "acquire": self.config.acquire,
             "wall_seconds": round(time.monotonic() - started, 2),
             "source_mirror": (self.config.source_mirrors.get(report.distro or "", "")
                               or self.config.source_mirrors.get(
@@ -414,18 +413,8 @@ class Engine:
 
 # --- classification ---------------------------------------------------------
 
-_NETWORK_MARKERS = (
-    "Host not in allowlist",
-    "Temporary failure resolving",
-    "Could not resolve host",
-    "Connection refused",
-    "403  Forbidden",
-    "Failed to fetch",
-    "Unable to connect",
-    "network is unreachable",
-    "Could not connect",
-    "ERROR: unable to select packages",
-)
+from .toolchains.base import NETWORK_MARKERS as _NETWORK_MARKERS
+
 _NOSOURCE_MARKERS = (
     "Unable to find a source package",
     "no APKBUILD for",
