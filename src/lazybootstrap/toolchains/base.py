@@ -303,7 +303,6 @@ def unpack_tarball(executor: Executor, host_tarball, prefix: str, strip: int = 1
     prebuilt image that dropped it. It is logged, never silent (D-24).
     """
     from pathlib import Path
-    import subprocess
 
     host_tarball = Path(host_tarball)
     executor.mkdir(prefix)
@@ -317,18 +316,17 @@ def unpack_tarball(executor: Executor, host_tarball, prefix: str, strip: int = 1
         result.check(f"unpack {host_tarball.name}")
         return
 
-    plain = host_tarball.with_suffix("")           # foo.tar.xz -> foo.tar
-    if not plain.exists():
-        log.warning("target has no xz although it is a declared system dependency; "
-                    "decompressing %s on the host instead", host_tarball.name)
-        with open(plain, "wb") as out:
-            subprocess.run(["xz", "-dc", str(host_tarball)], stdout=out, check=True)
-    remote = f"/tmp/{plain.name}"
-    executor.upload(plain, remote)
-    result = executor.run(
-        f"set -e\ncd {prefix}\ntar -xf {remote} --strip-components={strip}\nrm -f {remote}\nls",
-        title=f"unpack {plain.name}", timeout=3600, unit=unit, step_prefix="toolchain")
-    result.check(f"unpack {plain.name}")
+    # No xz in the target: decompress on the host and *stream* it in. Writing
+    # the intermediate tar to disk and copying it costs three times the install
+    # size and is what actually runs a machine out of space.
+    log.warning("target has no xz although it is a declared system dependency; "
+                "streaming %s decompressed from the host instead", host_tarball.name)
+    result = executor.feed(
+        f"set -e\nmkdir -p {prefix}\ncd {prefix}\ntar -x --strip-components={strip}\nls",
+        ["xz", "-dc", str(host_tarball)],
+        title=f"stream {host_tarball.name}", timeout=3600, unit=unit,
+        step_prefix="toolchain")
+    result.check(f"unpack {host_tarball.name}")
 
 
 def _shim_body(compiler: str, extra_flags: str, extra_ldflags: str,

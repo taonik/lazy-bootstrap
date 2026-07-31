@@ -119,6 +119,38 @@ class Executor(ABC):
     def _wrap(self, script: str, cwd: str | None, env: Mapping[str, str]) -> list[str]:
         """Return the host-side argv that runs `script` inside this environment."""
 
+    def feed(self, script: str, producer: list[str], title: str = "",
+             unit: str = "", step_prefix: str = "run", timeout: int | None = None):
+        """Run `producer` on the host and pipe its stdout into `script` inside.
+
+        The point is to never materialise the intermediate: decompressing a
+        2 GiB archive to an 8 GiB tar on the host and then copying that tar in
+        costs ~25 GiB of disk for an 8 GiB install, and fails on any machine
+        with a normal amount of free space.
+        """
+        import subprocess
+        import time
+
+        argv = self._wrap(script, None, dict(self.spec.env))
+        step_id = self.tracer.next_id(step_prefix)
+        self.tracer.step(step_id, title or "feed", backend=self.label,
+                         wrapper=[*producer, "|", *argv], unit=unit, script=script)
+        started = time.monotonic()
+        source = subprocess.Popen(producer, stdout=subprocess.PIPE)
+        try:
+            proc = subprocess.run(argv, stdin=source.stdout, capture_output=True,
+                                  text=True, timeout=timeout)
+        finally:
+            if source.stdout:
+                source.stdout.close()
+            source.wait()
+        seconds = time.monotonic() - started
+        output = (proc.stdout or "") + (proc.stderr or "")
+        rc = proc.returncode or (source.returncode or 0)
+        self.tracer.result(step_id, rc, seconds, output)
+        return CommandResult(rc=rc, stdout=proc.stdout or "", stderr=proc.stderr or "",
+                             seconds=seconds, argv=argv)
+
     @abstractmethod
     def upload(self, host_path: str | Path, target_path: str) -> None:
         """Copy a file or directory from the host into the environment."""
