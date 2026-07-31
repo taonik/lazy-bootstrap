@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lazybootstrap import planner, sysdeps  # noqa: E402
+from lazybootstrap import cache, planner, sysdeps  # noqa: E402
 from lazybootstrap.orchestration import images, rootfs, util  # noqa: E402
 from lazybootstrap.orchestration import spec as envspec  # noqa: E402
 from lazybootstrap.orchestration.orchestrator import Orchestrator  # noqa: E402
@@ -630,6 +630,108 @@ class TestUtil(unittest.TestCase):
         self.assertEqual(util.human_seconds(5), "5.0s")
         self.assertEqual(util.human_seconds(125), "2m05s")
         self.assertEqual(util.human_seconds(7325), "2h02m")
+
+
+class TestCachePolicy(unittest.TestCase):
+    """The livelock scenario, and the rules that make it impossible."""
+
+    def dep(self, name, size, freq=1):
+        d = cache.Dep(name=name, download=size, installed=size * 3)
+        d.needed_by = {f"u{i}" for i in range(freq)}
+        return d
+
+    def test_frequency_ordering_fetches_the_shared_base_first(self):
+        reg = cache.DepRegistry()
+        for unit in ("a", "b", "c"):
+            reg.add(unit, [self.dep("debhelper", 1_000_000)])
+        reg.add("a", [self.dep("libtool", 10)])
+        order = [d.name for d in reg.by_frequency()]
+        # Needed by three units, so it comes first despite being far larger.
+        self.assertEqual(order[0], "debhelper")
+
+    def test_a_merged_registry_counts_each_dependency_once(self):
+        reg = cache.DepRegistry()
+        for unit in ("a", "b", "c", "d"):
+            reg.add(unit, [self.dep("debhelper", 100)])
+        self.assertEqual(len(reg), 1)
+        self.assertEqual(reg.total_download_bytes(), 400)   # without sharing
+        self.assertEqual(reg.unique_download_bytes(), 100)  # with it
+
+    def test_a_working_set_larger_than_the_budget_bypasses_instead_of_waiting(self):
+        # I3. Queueing here would wait for room that cannot ever appear.
+        budget = cache.CacheBudget(1000)
+        self.assertEqual(budget.admit("huge", [self.dep("x", 5000)]),
+                         cache.Admission.BYPASS)
+        self.assertIn("huge", budget.bypassed)
+
+    def test_an_admitted_unit_keeps_its_dependencies(self):
+        # I2. Without this, the peer below would evict what "a" is using.
+        budget = cache.CacheBudget(1000)
+        budget.admit("a", [self.dep("shared", 600)])
+        budget.admit("b", [self.dep("other", 600)])   # cannot fit alongside
+        self.assertTrue(budget.holds("shared"))
+
+    def test_eviction_drops_the_least_needed_first(self):
+        budget = cache.CacheBudget(1000)
+        popular = self.dep("debhelper", 400, freq=9)
+        rare = self.dep("oddity", 400, freq=1)
+        budget.admit("a", [popular])
+        budget.admit("b", [rare])
+        budget.release("a")
+        budget.release("b")
+        budget.admit("c", [self.dep("newthing", 700)])
+        self.assertTrue(budget.holds("debhelper=") or budget.holds("debhelper"),
+                        "the dependency nine units still need was evicted first")
+
+    def test_units_that_cannot_share_the_cache_still_all_finish(self):
+        # The scenario in full: four units, a budget that fits one at a time,
+        # and a scheduler that must not spin. Progress is asserted by bounding
+        # the number of rounds - a livelock would exhaust them.
+        budget = cache.CacheBudget(1000)
+        queue = cache.AdmissionQueue(budget)
+        pending = [(f"u{i}", [self.dep(f"dep{i}", 900)]) for i in range(4)]
+        done, rounds = [], 0
+        while pending and rounds < 50:
+            rounds += 1
+            pick = queue.next_admissible(pending)
+            if pick is None:
+                # Nothing admissible: a real scheduler waits for a running unit.
+                if not done:
+                    self.fail("nothing could be admitted and nothing was running")
+                continue
+            unit, decision = pick
+            pending = [(u, w) for (u, w) in pending if u != unit]
+            done.append(unit)
+            budget.release(unit)          # the unit finished
+        self.assertEqual(len(done), 4, f"only {done} finished in {rounds} rounds")
+        self.assertLess(rounds, 20)
+
+    def test_a_starved_unit_eventually_blocks_the_queue(self):
+        budget = cache.CacheBudget(1000)
+        queue = cache.AdmissionQueue(budget, max_skips=2)
+        budget.admit("running", [self.dep("held", 800)])
+        big = ("big", [self.dep("bigdep", 900)])
+        small = ("small", [self.dep("smalldep", 100)])
+        # "big" cannot fit while "running" holds 800. Small units may overtake
+        # it, but only for a bounded number of rounds - then the queue holds so
+        # a steady stream of small work cannot starve it forever.
+        blocked_after = None
+        for attempt in range(1, 6):
+            if queue.next_admissible([big, small]) is None:
+                blocked_after = attempt
+                break
+        self.assertIsNotNone(blocked_after, "the queue never held for the big unit")
+        self.assertLessEqual(blocked_after, 2)
+
+    def test_a_package_too_big_for_the_environment_is_declined_not_attempted(self):
+        est = cache.SpaceEstimate(deps_installed=2_000_000_000, source=500_000_000)
+        self.assertFalse(est.fits_in(3_000_000_000))
+        self.assertIn("available", est.explain(3_000_000_000))
+        self.assertTrue(est.fits_in(20_000_000_000))
+
+    def test_sizes_are_reported_in_units_people_compare(self):
+        self.assertEqual(cache.human(512), "512 B")
+        self.assertIn("GiB", cache.human(5 * 1024 ** 3))
 
 
 if __name__ == "__main__":
