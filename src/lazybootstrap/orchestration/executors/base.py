@@ -119,6 +119,11 @@ class Executor(ABC):
     def _wrap(self, script: str, cwd: str | None, env: Mapping[str, str]) -> list[str]:
         """Return the host-side argv that runs `script` inside this environment."""
 
+    def _wrap_stdin(self, script: str, env: Mapping[str, str]) -> list[str]:
+        """argv for a command that must receive stdin. Most backends exec the
+        script directly and inherit it; container engines need to be told."""
+        return self._wrap(script, None, env)
+
     def feed(self, script: str, producer: list[str], title: str = "",
              unit: str = "", step_prefix: str = "run", timeout: int | None = None):
         """Run `producer` on the host and pipe its stdout into `script` inside.
@@ -131,7 +136,7 @@ class Executor(ABC):
         import subprocess
         import time
 
-        argv = self._wrap(script, None, dict(self.spec.env))
+        argv = self._wrap_stdin(script, dict(self.spec.env))
         step_id = self.tracer.next_id(step_prefix)
         self.tracer.step(step_id, title or "feed", backend=self.label,
                          wrapper=[*producer, "|", *argv], unit=unit, script=script)

@@ -108,6 +108,13 @@ class OciExecutor(Executor):
         argv += [self.container, "/bin/sh", "-c", prologue + script]
         return argv
 
+    def _wrap_stdin(self, script: str, env: Mapping[str, str]) -> list[str]:
+        """`podman exec` leaves stdin closed unless asked: without -i the piped
+        archive never reaches tar, which then reports the far more confusing
+        "This does not look like a tar archive"."""
+        argv = self._wrap(script, None, env)
+        return [argv[0], argv[1], "-i", *argv[2:]]
+
     def upload(self, host_path: str | Path, target_path: str) -> None:
         self._cp(str(Path(host_path)), f"{self.container}:{target_path}")
 
