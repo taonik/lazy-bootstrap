@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 from . import rootfs as rootfs_mod
+from . import proxy as proxy_mod
 from . import util
 from .executors import NEEDS_GUEST, NEEDS_ROOTFS, ExecutorSpec, create
 from .executors.vm import get_driver, resolve_driver_name
@@ -196,6 +197,14 @@ class Orchestrator:
         handle.executor = create(spec, self.tracer)
         handle.executor.start()
         handle.executor.mkdir(spec.workdir)
+
+        # A TLS-terminating egress proxy presents a CA the environment has never
+        # seen; without it every https fetch inside fails to verify (D-33).
+        settings = proxy_mod.detect()
+        if settings.active and settings.ca_bundle and request.network:
+            if proxy_mod.install_ca(handle.executor, settings, unit=request.name):
+                handle.executor.spec.env.update(proxy_mod.ca_env())
+                log.info("egress proxy in use: CA installed in %s", request.name)
         self._open.append(handle)
         return handle
 

@@ -16,6 +16,7 @@ from typing import Mapping
 
 from .. import util
 from ..logs import get
+from .. import proxy as proxy_mod
 from .base import Executor, ExecutorError, env_prefix, require
 
 log = get("oci")
@@ -50,6 +51,18 @@ class OciExecutor(Executor):
         if self.engine == "podman":
             argv.append("--replace")        # tolerate a container left by a killed run
             argv += ["--stop-timeout", "0"]  # SIGKILL straight away on removal
+        settings = proxy_mod.detect()
+        if settings.active and self.spec.network:
+            if settings.points_at_loopback():
+                # A loopback-bound proxy is unreachable from a bridged
+                # container: the name resolves to the gateway, but the proxy is
+                # not listening there. Sharing the host's network namespace is
+                # what makes the sanctioned egress path usable at all (D-33).
+                argv += ["--network", "host"]
+                log.info("egress proxy on loopback: using the host network namespace")
+            for key, value in settings.env.items():
+                argv += ["--env", f"{key}={value}"]
+        self._proxy = settings
         if not self.spec.network:
             argv += ["--network", "none"]
         if self.spec.privileged:

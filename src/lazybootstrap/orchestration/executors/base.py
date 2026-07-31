@@ -18,6 +18,7 @@ from typing import Mapping, Sequence
 
 from .. import util
 from ..logs import get
+from .. import proxy as proxy_mod
 from ..trace import Tracer
 
 log = get("exec")
@@ -227,6 +228,12 @@ def _decode(value: object) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", "replace")
     return str(value)
+
+
+def host_proxy_env() -> dict[str, str]:
+    """Proxy variables to hand to a backend that shares the host's loopback."""
+    settings = proxy_mod.detect()
+    return dict(settings.env) if settings.active else {}
 
 
 def env_prefix(env: Mapping[str, str]) -> list[str]:

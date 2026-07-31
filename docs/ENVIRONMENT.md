@@ -69,6 +69,7 @@ Fil-C and LLVM come from GitHub, which *is* reachable:
 |---|---|---|---|
 | `debian:13` | ⛔ archive | ⛔ archive | ✅ provisioned, compiles and runs |
 | `alpine` | ⛔ archive | ⛔ archive | ❌ musl-only target cannot run the glibc-linked clang (D-13 corrected) |
+| `alpine` + a glibc loader | ⛔ archive | ⛔ archive | ⚠️ clang runs and identifies itself; then needs `ld` from binutils, which needs apk |
 
 `blocked` is a first-class status precisely so this shows up as an environment
 limit rather than as a package that "fails to compile".

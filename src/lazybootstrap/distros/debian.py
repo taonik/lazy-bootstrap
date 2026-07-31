@@ -225,7 +225,8 @@ echo "--- dpkg-buildpackage ---"
 if [ "$(id -u)" = 0 ] && command -v runuser >/dev/null 2>&1 \\
    && id {BUILD_USER} >/dev/null 2>&1 && command -v fakeroot >/dev/null 2>&1; then
     chown -R {BUILD_USER}:{BUILD_USER} . .. 2>/dev/null || true
-    runuser -u {BUILD_USER} -- env {_forwarded_env()} \\
+{_forward_env_snippet()}
+    runuser -u {BUILD_USER} -- env "$@" \\
         dpkg-buildpackage -b -uc -us -d -rfakeroot --jobs-force={jobs}
 else
     echo "[lazy-bootstrap] building as root: no {BUILD_USER} user or no fakeroot" >&2
@@ -264,14 +265,33 @@ BUILD_USER = "lbbuild"
 
 #: `runuser -u` resets the environment, so the toolchain's variables have to be
 #: forwarded explicitly. PATH carries the shim, which is the whole mechanism.
+#: HOME is deliberately absent: it would still point at /root, which the build
+#: user cannot read (dpkg warns about it on every invocation).
 _FORWARD = ("PATH", "LB_TOOLCHAIN", "LB_CC", "CC", "CXX", "DEB_BUILD_OPTIONS",
             "DEB_CFLAGS_APPEND", "DEB_CXXFLAGS_APPEND", "DEB_LDFLAGS_APPEND",
-            "FILC_ROOT", "SOURCE_DATE_EPOCH", "HOME", "LC_ALL", "LANG")
+            "FILC_ROOT", "SOURCE_DATE_EPOCH", "LC_ALL", "LANG")
 
 
-def _forwarded_env() -> str:
-    """`VAR="$VAR"` for every variable the build needs across runuser."""
-    return " ".join(f'{name}="${{{name}:-}}"' for name in _FORWARD)
+def _forward_env_snippet() -> str:
+    """Shell collecting into "$@" only the variables that are actually set.
+
+    Emphatically not `VAR="${VAR:-}"`. Exporting an *empty* CC is worse than
+    leaving it unset: an empty environment variable still overrides make's
+    built-in default of `cc`, so the recipe starts with the CFLAGS, `sh -c`
+    swallows the leading `-g` as one of its own options, and the build dies
+    with `make: g: No such file or directory` - a message that names neither
+    the cause nor any real file. Caught by the execution matrix immediately
+    after D-29 stopped exporting CC.
+    """
+    lines = [
+        "set --",
+        "for _v in " + " ".join(_FORWARD) + "; do",
+        '    eval "_val=\\${$_v:-}"',
+        '    [ -n "$_val" ] || continue',
+        '    set -- "$@" "$_v=$_val"',
+        "done",
+    ]
+    return "\n".join(lines)
 
 
 def _q(value: str) -> str:

@@ -484,6 +484,28 @@ un buildd Debian costruisce da utente normale con `fakeroot` — tanto che
   vanno inoltrate esplicitamente (`_FORWARD` in `debian.py`). `PATH` è la più
   importante: porta lo shim.
 
+### D-30b — Una variabile d'ambiente *vuota* non equivale a una non impostata
+Corollario di D-29, trovato dalla matrice di esecuzione poche ore dopo averlo
+introdotto. Attraversando `runuser` inoltravo le variabili con
+`VAR="${VAR:-}"`. Da quando D-29 ha smesso di esportare `CC`, quella riga
+materializzava `CC=""` **vuota** — che è peggio di non averla: una variabile
+d'ambiente vuota batte comunque il default `cc` di make. La ricetta diventa
+` -g -O2 ...`, `sh -c` si mangia il `-g` come propria opzione, e la build muore
+con:
+
+```
+make[1]: g: No such file or directory
+make[1]: O2: No such file or directory
+```
+
+un messaggio che non nomina né la causa né un file esistente. Ora si inoltrano
+solo le variabili effettivamente valorizzate. `HOME` è stata tolta del tutto:
+puntava a `/root`, illeggibile per l'utente di build.
+
+**La lezione operativa**: il fix di D-29 era corretto e la sua verifica mirata
+(gzip, tar) passava; a rompersi era un percorso *diverso*. Senza la matrice
+completa sarebbe finito in un commit.
+
 ### D-31 — "La toolchain funziona qui" è una domanda separata da "l'archivio è raggiungibile"
 `lazy-bootstrap toolchain check <target>` provisiona una toolchain ed esegue
 compile+run, **senza** preparare la build machinery della distro.
@@ -514,6 +536,15 @@ Ora il fallimento è diagnosticato: si confrontano i loader presenti nel target
 invece di fidarsi di `execve`, che per un interprete ELF mancante restituisce
 ENOENT e quindi un "not found" che punta al file sbagliato.
 
+**Rimedio verificato, non solo asserito.** Su una base musl che *ha* anche il
+loader glibc (`frolvlad/alpine-glibc`: `/lib/ld-musl-x86_64.so.1` **e**
+`/lib64/ld-linux-x86-64.so.2`) il clang di Fil-C parte e si identifica
+regolarmente (`0.681 (pizfix, musl, clang 20.1.8)`). Il fallimento successivo è
+un altro e molto più avanti — `unable to execute command: Executable "ld"
+doesn't exist!` — cioè mancano i binutils, che richiedono `apk`. Quindi:
+il loader glibc è **necessario e sufficiente per eseguire il compilatore**; per
+compilare davvero serve anche il resto della toolchain dalla distro.
+
 ### D-32 — Nomi delle varianti e nomi degli asset non sono la stessa stringa
 Costruivo l'URL come `{variante}-{versione}-linux-x86_64.tar.xz`, con variante
 `pizfix` o `optfil`. Ma upstream pubblica il build musl come **`filc-*`**:
@@ -527,6 +558,58 @@ Costruivo l'URL come `{variante}-{versione}-linux-x86_64.tar.xz`, con variante
 Ogni provisioning musl faceva 404. Ora la mappa variante→asset è esplicita
 (`ASSET_PREFIX`) e c'è un test che la fissa. Vale come regola generale: quando
 un identificatore interno finisce dentro un URL, va mappato, non concatenato.
+
+### D-33 — Il proxy di uscita deve essere raggiungibile *dall'ambiente*, non solo dall'host
+Sbloccare un dominio non basta se il traffico dell'ambiente non arriva al proxy.
+Diagnosi completa, fatta misurando e non indovinando:
+
+| dove | esito | causa |
+|---|---|---|
+| `curl` dall'host, con proxy | 200 | percorso sanzionato, funziona |
+| `curl` dall'host, senza proxy | 403 | il filtro di rete è a monte |
+| `apk` dentro un container | `Connection refused` | eredita `HTTPS_PROXY=http://127.0.0.1:PORT`, e **`127.0.0.1` nel container è il container** |
+| `apk` dentro un chroot | `certificate not trusted` | il loopback è condiviso, ma la CA del proxy è ignota al rootfs |
+
+Due ostacoli distinti, entrambi da superare:
+
+1. **L'indirizzo.** Il container risolve `host.containers.internal` al gateway
+   del bridge, ma il proxy ascolta **solo** su loopback: la porta lì è chiusa.
+   Riscrivere l'indirizzo non basta — serve **condividere il network namespace
+   dell'host** (`--network host`), che è ciò che rende utilizzabile il percorso
+   sanzionato. Non è un aggiramento: il filtro a monte resta, e senza proxy la
+   risposta è 403 comunque.
+2. **La fiducia.** Un proxy che termina TLS presenta la propria CA. Nessun
+   meccanismo singolo raggiunge tutti i client:
+
+   | client | cosa serve davvero |
+   |---|---|
+   | `apk` (apk-tools 3) | **`SSL_CERT_FILE`** — *ignora* un certificato aggiunto in coda al bundle di sistema |
+   | `apt` | il bundle di sistema, o `Acquire::https::CaInfo` |
+   | `curl`, `git`, python | `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` |
+
+   Vengono impostati tutti. La differenza misurata su Alpine è fra
+   `TLS: server certificate not trusted` e `28642 distinct packages available`.
+
+**Nota implementativa** — la CA (187 KB) va **caricata come file**, non scritta
+con `write_text`: quest'ultima mette il contenuto sulla riga di comando e
+fallisce con `E2BIG` ("Argument list too long"), un errore che non nomina né la
+CA né il proxy.
+
+### D-13 (seconda correzione) — `libc6-compat` non basta per Fil-C
+La specifica iniziale assumeva `alpine + libc6-compat` → variante musl di Fil-C.
+Misurato: gcompat fornisce il **loader** ma non i **simboli**.
+
+```
+Error relocating clang-20: __wmemcpy_chk: symbol not found
+Error relocating clang-20: __wmemset_chk: symbol not found
+Error relocating clang-20: mallinfo2: symbol not found
+```
+
+Sono funzioni glibc (fortificate, e `mallinfo2`) che gcompat non implementa.
+Quindi il driver clang di Fil-C **non gira su Alpine nemmeno con libc6-compat**:
+serve una glibc vera. La diagnosi ora distingue i tre casi — loader assente,
+loader presente ma simboli mancanti, binario che parte — perché portano a rimedi
+completamente diversi.
 
 ---
 

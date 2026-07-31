@@ -68,6 +68,20 @@ bin={binary}
 [ -e /lib/ld-musl-x86_64.so.1 ] && echo HAVE_MUSL_LOADER
 exit 0
 """
+    # The loader may be present and the binary still refuse to start, because a
+    # compatibility layer provides ld.so without the symbols behind it. That
+    # message comes out on stderr, so ask the binary itself first.
+    attempt = executor.run(f'"{binary}" --version 2>&1 | head -n 6',
+                           title="run binary", unit=unit, step_prefix="toolchain")
+    if "symbol not found" in attempt.output or "Error relocating" in attempt.output:
+        missing = sorted({line.rsplit(":", 1)[0].rsplit(" ", 1)[-1]
+                          for line in attempt.output.splitlines()
+                          if "symbol not found" in line})[:4]
+        return (f"{binary} starts but cannot resolve glibc symbols "
+                f"({', '.join(missing)}...). A compatibility layer such as "
+                f"gcompat/libc6-compat provides the loader but not these; the "
+                f"binary needs a real glibc target.")
+
     out = executor.run(script, title="diagnose binary", unit=unit,
                        step_prefix="toolchain").stdout
     if "MISSING_BINARY" in out:
