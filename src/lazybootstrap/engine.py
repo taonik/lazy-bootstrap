@@ -90,7 +90,9 @@ class Engine:
             name=name,
             acquire=self.config.acquire,
             registry_mirrors=dict(self.config.registry_mirrors),
-            env={f"LB_VM_{k.upper()}": v for k, v in self.config.vm_options.items()},
+            env={**{f"LB_VM_{k.upper()}": v for k, v in self.config.vm_options.items()},
+                 **({"LB_DISTFILES_MIRROR": self.config.distfiles_mirror}
+                    if self.config.distfiles_mirror else {})},
             labels={"tool": "lazy-bootstrap"},
         )
 

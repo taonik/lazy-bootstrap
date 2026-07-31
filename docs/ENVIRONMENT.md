@@ -89,20 +89,37 @@ connect_rejected: gateway answered 403 to CONNECT (policy denial or upstream fai
 This is the environment's network policy, which the account owner chooses when
 creating the environment. It is not something the tool can or should work around.
 
+### What changed once the allowlist was widened
+
+`dl-cdn.alpinelinux.org` became reachable, which moved the Alpine target
+forward several steps. Each step revealed the next real problem, all of them
+now fixed:
+
+| step | was | now |
+|---|---|---|
+| `apk` inside a container | `Connection refused` (proxy on host loopback) | works — D-33 |
+| `apk` TLS | `certificate not trusted` | works — `SSL_CERT_FILE` |
+| toolchains | unavailable | gcc 15.2.0, clang 22.1.3, both from the distro |
+| `abuild-keygen` | `doas: not found` | key generated and installed directly |
+| `abuild deps` | `Do not run abuild as root` | dependencies read from the APKBUILD, installed with apk |
+| `abuild` build | `Do not run abuild as root` | runs as `builder` via `su -p` |
+| upstream sources | — | **still blocked**, see below |
+
+`deb.debian.org` is still `403`, so Debian remains at the first step.
+
 ### To lift the limitation
 
-Add to the environment's network allowlist:
-
 ```
-deb.debian.org                       # Debian binaries and sources
-dl-cdn.alpinelinux.org               # Alpine packages
-production.cloudflare.docker.com     # Docker Hub blobs (or keep using mirror.gcr.io)
-production.cloudfront.docker.com
+deb.debian.org                       # Debian sources and build-dependencies
+distfiles.alpinelinux.org            # Alpine's mirror of every upstream tarball
 ```
 
-Alpine's `abuild` additionally fetches each package's upstream tarball, so a
-full Alpine rebuild needs the upstream hosts named in the APKBUILDs
-(`ftp.gnu.org`, `www.kernel.org`, …) or a local source cache.
+The second line is worth one host: Alpine's `abuild` otherwise fetches each
+package's tarball from its own upstream (`musl.libc.org`, `busybox.net`,
+`zlib.net`, `www.openssl.org`, `gitlab.alpinelinux.org`, …), all of which are
+currently blocked. Pass it with `--distfiles-mirror`, or unblock those hosts
+individually. Of the upstream hosts, only `ftp.gnu.org` and `github.com` are
+currently reachable — no package in the Alpine base image sources from either.
 
 Nothing in the tool needs changing: `--registry-mirror` and `--source-mirror`
 already exist for exactly this, and the profiles in `profiles/` set the mirror

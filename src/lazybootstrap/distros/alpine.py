@@ -113,8 +113,22 @@ adduser -D -G abuild builder 2>/dev/null || true
 addgroup builder abuild 2>/dev/null || true
 export PACKAGER="lazy-bootstrap <noreply@example.invalid>"
 if [ ! -d /root/.abuild ] || ! ls /root/.abuild/*.rsa >/dev/null 2>&1; then
-    printf '\\n' | abuild-keygen -a -i -n >/dev/null 2>&1 || abuild-keygen -a -i -n
+    # Generate only (-a -n), never -i: the install step shells out to `doas`,
+    # which a minimal image does not have, and abuild-keygen then dies with
+    # "doas: not found" *after* writing a perfectly good key. We are already
+    # root, so installing the public key is a copy.
+    printf '\\n' | abuild-keygen -a -n >/dev/null 2>&1 || printf '\\n' | abuild-keygen -a -n
 fi
+mkdir -p /etc/apk/keys
+for pub in /root/.abuild/*.rsa.pub; do
+    [ -e "$pub" ] || continue
+    cp -f "$pub" /etc/apk/keys/ && echo "installed $(basename "$pub")"
+done
+# The build runs as `builder`, so the key has to be readable there too.
+mkdir -p /home/builder/.abuild
+cp -f /root/.abuild/* /home/builder/.abuild/ 2>/dev/null || true
+sed -i "s|/root/.abuild|/home/builder/.abuild|g" /home/builder/.abuild/abuild.conf 2>/dev/null || true
+chown -R builder /home/builder 2>/dev/null || true
 ls /root/.abuild/
 """,
             title="abuild keygen", timeout=300, unit=ctx.unit, step_prefix="prepare")))
@@ -168,7 +182,10 @@ echo "LB_VERSION=$(sed -n 's/^pkgver=//p' "$found/{source}/APKBUILD" | head -n 1
 
     def install_build_deps(self, executor: Executor, source: str,
                            ctx: BuildContext) -> CommandResult:
-        # `abuild deps` reads makedepends from the APKBUILD in the current dir.
+        # Not `abuild deps`: abuild refuses to run as root, and installing
+        # packages *requires* root - so that command can never be run by either
+        # user. The APKBUILD is a shell fragment, so source it and let apk do
+        # the installing, which is the one part that genuinely needs root.
         return executor.run(
             f"""
 set -e
@@ -176,7 +193,15 @@ cd {_q(ctx.workdir)}/aports
 dir=$(find . -maxdepth 2 -type d -name {_q(source)} | head -n 1)
 [ -n "$dir" ] || {{ echo "package dir not checked out" >&2; exit 3; }}
 cd "$dir"
-abuild -r deps 2>/dev/null || abuild deps
+# Read the declared dependencies without executing the build logic.
+deps=$(. ./APKBUILD >/dev/null 2>&1; printf '%s %s %s\\n' \\
+        "${{makedepends:-}}" "${{makedepends_host:-}}" "${{makedepends_build:-}}")
+# Strip version constraints and the pretend-packages abuild resolves itself.
+deps=$(printf '%s\\n' $deps | sed 's/[<>=].*$//' | grep -v '^$' \\
+       | grep -v '^!' | sort -u | tr '\\n' ' ')
+echo "declared makedepends: ${{deps:-<none>}}"
+[ -n "$deps" ] || exit 0
+apk add --no-cache $deps
 """,
             title=f"abuild deps {source}", cwd=ctx.workdir, timeout=ctx.timeout,
             unit=ctx.unit, step_prefix="deps",
@@ -186,6 +211,10 @@ abuild -r deps 2>/dev/null || abuild deps
         jobs = self.jobs_expr(ctx)
         # -r installs missing deps, -K keeps the build dir for inspection,
         # -d skips the dependency check we already ran.
+        # abuild refuses to run as root, exactly like Debian's tar refuses to
+        # configure as root (D-30): both distros build as a normal user. The
+        # build dependencies were installed as root in the previous step, so
+        # `-r` is dropped here - it would need doas/sudo to install anything.
         script = f"""
 set -e
 cd {_q(tree.path)}
@@ -193,10 +222,23 @@ export JOBS={jobs}
 export MAKEFLAGS="-j{jobs}"
 export PACKAGER="lazy-bootstrap <noreply@example.invalid>"
 export REPODEST={ctx.workdir}/packages
+# Alpine mirrors every upstream tarball; abuild prefers this over the
+# per-package URLs, which is the difference between needing one reachable
+# host and needing dozens (D-20).
+[ -n "${{LB_DISTFILES_MIRROR:-}}" ] && export DISTFILES_MIRROR="$LB_DISTFILES_MIRROR"
 echo "--- compiler in use ---"
-"${{CC:-cc}}" --version 2>&1 | head -n 2 || true
+"${{LB_CC:-cc}}" --version 2>&1 | head -n 2 || true
 echo "--- abuild ---"
-abuild -r -K
+if [ "$(id -u)" = 0 ] && id {BUILD_USER} >/dev/null 2>&1; then
+    chown -R {BUILD_USER} . "$REPODEST" 2>/dev/null || true
+    # busybox `su -p` preserves the environment, which is what carries PATH
+    # (and therefore the shim), LB_CC and the proxy settings. HOME must still
+    # be overridden: abuild writes to ~/.abuild and /root is not writable here.
+    su -p {BUILD_USER} -s /bin/sh -c \
+        "HOME=/home/{BUILD_USER}; export HOME; cd \"$PWD\" && abuild -K"
+else
+    abuild -r -K
+fi
 """
         return executor.run(script, title=f"abuild {tree.name}", env=ctx.env, cwd=tree.path,
                             timeout=ctx.timeout, unit=ctx.unit, step_prefix="build")
@@ -226,6 +268,28 @@ def detect_libc(executor: Executor) -> str:
         title="detect libc", step_prefix="probe",
     )
     return result.stdout.strip() or "unknown"
+
+
+#: abuild refuses to run as root; this account does the building (D-30).
+BUILD_USER = "builder"
+
+#: `su` resets the environment, so the toolchain's variables are forwarded
+#: explicitly - and only when set, never as empty strings (D-30b).
+_FORWARD = ("PATH", "LB_TOOLCHAIN", "LB_CC", "CC", "CXX", "FILC_ROOT",
+            "SSL_CERT_FILE", "CURL_CA_BUNDLE", "SOURCE_DATE_EPOCH",
+            "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy")
+
+
+def _forward_env_snippet() -> str:
+    lines = [
+        "set --",
+        "for _v in " + " ".join(_FORWARD) + "; do",
+        '    eval "_val=\\${$_v:-}"',
+        '    [ -n "$_val" ] || continue',
+        '    set -- "$@" "$_v=$_val"',
+        "done",
+    ]
+    return "\n".join(lines)
 
 
 def _q(value: str) -> str:

@@ -107,6 +107,10 @@ class RunConfig:
     #: what the orchestrator may do to obtain the environment (D-27):
     #: auto (pull if missing) | require (never fetch) | download | build
     acquire: str = "auto"
+    #: Alpine: mirror of upstream tarballs, e.g.
+    #: https://distfiles.alpinelinux.org/distfiles/ . One reachable host instead
+    #: of one per package (D-20).
+    distfiles_mirror: str = ""
     #: VM driver settings, passed through as LB_VM_<KEY> (docs/SPECS.md D-28)
     vm_options: dict[str, str] = field(default_factory=dict)
     engine: str = "podman"                  # oci backend: podman | docker

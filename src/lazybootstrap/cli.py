@@ -159,6 +159,9 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
                         help="apt: 'debian=http://host/debian trixie main'; apk: 'alpine=<aports branch>'")
     parser.add_argument("--image-setup", action="append", default=None, metavar="CMD",
                         help="shell command run once on the image before anything else")
+    parser.add_argument("--distfiles-mirror", metavar="URL",
+                        help="Alpine: mirror of upstream tarballs "
+                             "(e.g. https://distfiles.alpinelinux.org/distfiles/)")
     parser.add_argument("--vm-option", action="append", default=None, metavar="KEY=VALUE",
                         help="VM driver setting: SSH_KEY, SSH_USER, SEED, MEMORY, CPUS, "
                              "ACCEL, BOOT_TIMEOUT (repeatable)")
@@ -198,7 +201,7 @@ def resolve_config(args: argparse.Namespace) -> RunConfig:
                  "timeout", "build_jobs", "limit", "include", "exclude",
                  "default_toolchain", "fallback_toolchain", "preflight_package",
                  "system_deps", "rootfs", "rootfs_path", "rootfs_prepare", "workdir",
-                 "acquire"):
+                 "acquire", "distfiles_mirror"):
         value = getattr(args, name, None)
         if value not in (None, [], ""):
             overrides[name] = value
