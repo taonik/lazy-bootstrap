@@ -13,7 +13,11 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
-DEFAULT_CACHE = Path(os.environ.get("LAZY_BOOTSTRAP_CACHE", "/var/cache/lazy-bootstrap"))
+from .orchestration.util import default_cache_dir
+
+#: /var/cache when it is usable, a per-user directory otherwise: running as
+#: root is not a requirement of this tool, and a CI runner is not root.
+DEFAULT_CACHE = Path(os.environ.get("LAZY_BOOTSTRAP_CACHE") or default_cache_dir())
 DEFAULT_OUT = Path(os.environ.get("LAZY_BOOTSTRAP_OUT", "runs"))
 
 # Registry mirrors let a locked-down network still pull public base images:

@@ -39,9 +39,11 @@ log = get("orchestrator")
 
 
 class Orchestrator:
-    def __init__(self, cache_dir: str | Path = "/var/cache/lazy-bootstrap",
+    def __init__(self, cache_dir: str | Path = "",
                  tracer: Tracer | None = None) -> None:
-        self.cache_dir = util.ensure_dir(cache_dir)
+        # Deliberately not created here: available() answers questions without
+        # side effects, and that has to include not needing write access.
+        self.cache_dir = Path(cache_dir or util.default_cache_dir())
         self.tracer = tracer or Tracer()
         self._open: list[EnvironmentHandle] = []
 
@@ -224,6 +226,7 @@ class Orchestrator:
     # -- helpers ------------------------------------------------------------
 
     def _store(self, request: EnvironmentRequest) -> ImageStore:
+        util.ensure_dir(self.cache_dir)      # now we really are going to write
         return ImageStore(self.cache_dir, request.engine or "podman",
                           request.registry_mirrors, self.tracer)
 

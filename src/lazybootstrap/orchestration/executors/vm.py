@@ -312,9 +312,14 @@ class VmExecutor(Executor):
 def _disk_format(spec: VmSpec) -> str:
     if spec.disk_format != "auto":
         return spec.disk_format
-    proc = subprocess.run(["qemu-img", "info", "--output=json", spec.image],
-                          capture_output=True, text=True)
-    if proc.returncode == 0:
+    try:
+        proc = subprocess.run(["qemu-img", "info", "--output=json", spec.image],
+                              capture_output=True, text=True)
+    except OSError:
+        # No qemu-img on this machine - the same machines where the VM backend
+        # reports itself unavailable. Fall back to the file name.
+        proc = None
+    if proc is not None and proc.returncode == 0:
         import json
 
         try:

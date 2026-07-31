@@ -62,6 +62,30 @@ def indent(text: str, prefix: str = "  ") -> str:
 # --- filesystem -------------------------------------------------------------
 
 
+SYSTEM_CACHE = "/var/cache/lazy-bootstrap"
+
+
+def default_cache_dir() -> str:
+    """The system cache when it is usable, a per-user one otherwise.
+
+    Running as root is not a requirement of this tool, so defaulting to a
+    directory only root can create would make every non-root invocation fail
+    at construction time - including the ones that only want to ask a question.
+    """
+    import os
+
+    candidate = Path(SYSTEM_CACHE)
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe = candidate / ".writable"
+        probe.touch()
+        probe.unlink()
+        return str(candidate)
+    except OSError:
+        base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+        return str(Path(base) / "lazy-bootstrap")
+
+
 def ensure_dir(path: str | os.PathLike[str]) -> Path:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
