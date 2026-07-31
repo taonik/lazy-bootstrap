@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import sys
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lazybootstrap import cache, planner, sysdeps  # noqa: E402
+from lazybootstrap import cache, envstore, planner, sysdeps  # noqa: E402
 from lazybootstrap.orchestration import images, rootfs, util  # noqa: E402
 from lazybootstrap.orchestration import spec as envspec  # noqa: E402
 from lazybootstrap.orchestration.orchestrator import Orchestrator  # noqa: E402
@@ -732,6 +733,89 @@ class TestCachePolicy(unittest.TestCase):
     def test_sizes_are_reported_in_units_people_compare(self):
         self.assertEqual(cache.human(512), "512 B")
         self.assertIn("GiB", cache.human(5 * 1024 ** 3))
+
+
+class TestEnvStore(unittest.TestCase):
+    """Saved build environments, and the checks that keep them honest."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.store = envstore.EnvStore(self.tmp)
+
+    def manifest(self, **over):
+        base = dict(os_name="debian", os_version="13", arch="amd64",
+                    package="hello", package_version="2.10-3",
+                    version_slice="2.10-3", toolchain="gcc",
+                    build_depends="debhelper (>= 13)",
+                    index_fingerprint="abc123", backend="podman",
+                    payload="lb-env/debian-13-hello:gcc")
+        base.update(over)
+        return envstore.Manifest(**base)
+
+    def test_layout_follows_os_version_package_slice(self):
+        m = self.manifest()
+        self.assertTrue(str(self.store.dir_for(m)).endswith(
+            "packages/debian/13/hello/2.10-3"))
+
+    def test_a_saved_environment_is_found_again(self):
+        self.store.save(self.manifest())
+        found, why = self.store.find(self.manifest())
+        self.assertIsNotNone(found, why)
+        self.assertEqual(found.payload, "lb-env/debian-13-hello:gcc")
+
+    def test_a_different_toolchain_never_reuses_the_environment(self):
+        # An env prepared for gcc holds the wrong compiler for filc, and
+        # reusing it would label a result filc that is nothing of the kind.
+        self.store.save(self.manifest(toolchain="gcc"))
+        found, why = self.store.find(self.manifest(toolchain="filc-0.681"))
+        self.assertIsNone(found)
+        self.assertIn("nothing saved", why)
+
+    def test_changed_build_depends_invalidate_every_mode(self):
+        self.store.save(self.manifest())
+        wanted = self.manifest(build_depends="debhelper (>= 13), libtool")
+        for mode in (envstore.Reuse.STRICT, envstore.Reuse.RELAXED):
+            found, why = self.store.find(wanted, mode)
+            self.assertIsNone(found, f"reused despite new build-deps in {mode}")
+            self.assertIn("build-dependencies changed", why)
+
+    def test_a_moved_archive_blocks_strict_but_not_relaxed(self):
+        self.store.save(self.manifest(index_fingerprint="old"))
+        wanted = self.manifest(index_fingerprint="new")
+        strict, why = self.store.find(wanted, envstore.Reuse.STRICT)
+        self.assertIsNone(strict)
+        self.assertIn("archive index moved on", why)
+        relaxed, _ = self.store.find(wanted, envstore.Reuse.RELAXED)
+        self.assertIsNotNone(relaxed)
+
+    def test_reuse_can_be_turned_off_entirely(self):
+        self.store.save(self.manifest())
+        found, why = self.store.find(self.manifest(), envstore.Reuse.OFF)
+        self.assertIsNone(found)
+        self.assertIn("disabled", why)
+
+    def test_version_slices_trade_hit_rate_for_risk(self):
+        self.assertEqual(envstore.slice_version("2.10-3", "exact"), "2.10-3")
+        self.assertEqual(envstore.slice_version("2.10-3", "minor"), "2.10")
+        self.assertEqual(envstore.slice_version("2.10-3", "major"), "2")
+        self.assertEqual(envstore.slice_version("1:2.10-3", "major"), "2")
+        self.assertEqual(envstore.slice_version("2.10-3", "any"), "any")
+
+    def test_the_budget_keeps_what_gets_reused(self):
+        payload = Path(self.tmp) / "blob.tar"
+        payload.write_bytes(b"x" * 1000)
+        store = envstore.EnvStore(Path(self.tmp) / "store", budget=1500)
+        store.save(self.manifest(package="popular", version_slice="1", hits=9),
+                   payload_source=payload)
+        store.save(self.manifest(package="unused", version_slice="1", hits=0),
+                   payload_source=payload)
+        names = {m.package for m in store.entries()}
+        self.assertIn("popular", names, "dropped the environment that gets reused")
+
+    def test_a_hostile_package_name_cannot_escape_the_store(self):
+        m = self.manifest(package="../../etc/passwd")
+        self.assertNotIn("..", str(self.store.dir_for(m)))
 
 
 if __name__ == "__main__":
