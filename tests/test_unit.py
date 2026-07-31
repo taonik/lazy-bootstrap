@@ -129,6 +129,12 @@ class TestFilcVariant(unittest.TestCase):
     def test_unknown_libc_falls_back_to_the_self_contained_build(self):
         self.assertEqual(self._driver().select_variant("unknown"), filc.PIZFIX)
 
+    def test_asset_name_is_not_the_variant_name(self):
+        # Upstream publishes the musl build as filc-*, not pizfix-*; assuming
+        # otherwise 404s every musl provisioning (found on alpine).
+        self.assertEqual(filc.ASSET_PREFIX[filc.PIZFIX], "filc")
+        self.assertEqual(filc.ASSET_PREFIX[filc.OPTFIL], "optfil")
+
 
 # --- the compiler shim ------------------------------------------------------
 
@@ -172,7 +178,27 @@ class TestShim(unittest.TestCase):
         install = Install("fake", "fake", "distro", cc="/x/cc", cxx="/x/c++", shimmed=True)
         env = driver.environment(install)
         self.assertTrue(env["PATH"].startswith("/opt/lazy-bootstrap/shim/bin:"))
-        self.assertEqual(env["CC"], "/opt/lazy-bootstrap/shim/bin/cc")
+
+    def test_cc_is_not_exported_next_to_the_shim(self):
+        # D-29: an exported CC beats the compiler autoconf derives from --host,
+        # so gzip's --host=i686-w64-mingw32 sub-build dies under plain gcc.
+        driver = _FakeToolchain(ToolchainConfig(id="fake"))
+        install = Install("fake", "fake", "distro", cc="/x/cc", cxx="/x/c++", shimmed=True)
+        env = driver.environment(install)
+        self.assertNotIn("CC", env)
+        self.assertNotIn("CXX", env)
+        # ...but the probe still has a name to call.
+        self.assertEqual(env["LB_CC"], "/opt/lazy-bootstrap/shim/bin/cc")
+
+    def test_cc_is_exported_when_there_is_no_shim(self):
+        driver = _FakeToolchain(ToolchainConfig(id="fake"))
+        install = Install("fake", "fake", "distro", cc="/x/cc", cxx="/x/c++", shimmed=False)
+        self.assertEqual(driver.environment(install)["CC"], "/x/cc")
+
+    def test_export_cc_can_be_turned_back_on(self):
+        driver = _FakeToolchain(ToolchainConfig(id="fake", export_cc=True))
+        install = Install("fake", "fake", "distro", cc="/x/cc", cxx="/x/c++", shimmed=True)
+        self.assertEqual(driver.environment(install)["CC"], "/opt/lazy-bootstrap/shim/bin/cc")
 
 
 # --- planner ----------------------------------------------------------------

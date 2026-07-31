@@ -17,7 +17,8 @@ from __future__ import annotations
 from ..orchestration.executors.base import Executor
 from ..orchestration.logs import get
 from ..net import DownloadError
-from .base import Install, Toolchain, ToolchainError, unpack_tarball
+from .base import (Install, Toolchain, ToolchainError, diagnose_unrunnable,
+                   unpack_tarball)
 
 log = get("tc.filc")
 
@@ -27,6 +28,11 @@ DEFAULT_VERSION = "0.681"
 
 PIZFIX = "pizfix"     # musl, self-contained
 OPTFIL = "optfil"     # glibc, /opt/fil
+
+#: The variant name and the *asset* name are not the same string, and assuming
+#: they were made every musl provisioning 404. Upstream ships the pizfix build
+#: as `filc-<version>-...` and the /opt/fil build as `optfil-<version>-...`.
+ASSET_PREFIX = {PIZFIX: "filc", OPTFIL: "optfil"}
 
 
 class FilcToolchain(Toolchain):
@@ -80,7 +86,7 @@ class FilcToolchain(Toolchain):
 
         version = self.config.version or DEFAULT_VERSION
         variant = self.select_variant(facts.get("libc", "unknown"))
-        asset = f"{variant}-{version}-linux-x86_64.tar.xz"
+        asset = f"{ASSET_PREFIX[variant]}-{version}-linux-x86_64.tar.xz"
         url = self.config.url or f"{RELEASE_BASE}/v{version}/{asset}"
 
         download = fetcher.fetch(url)
@@ -90,6 +96,20 @@ class FilcToolchain(Toolchain):
             unpack_tarball(executor, download.path, prefix, strip=1, unit=unit)
             return self._setup_pizfix(executor, prefix, version, variant, unit)
         return self._setup_optfil(executor, download.path, fetcher, version, variant, unit)
+
+    @staticmethod
+    def _require_runnable(executor: Executor, cc: str, unit: str) -> None:
+        """The pizfix build targets musl but its *driver* is a glibc binary.
+
+        Discovered on plain alpine, where it fails with a bare "not found"
+        (docs/SPECS.md D-13, corrected). Saying so beats letting every package
+        fail later with an unreadable error.
+        """
+        if executor.run(f'"{cc}" --version >/dev/null 2>&1',
+                        title="compiler runs", unit=unit, step_prefix="toolchain").ok:
+            return
+        detail = diagnose_unrunnable(executor, cc, unit)
+        raise ToolchainError(detail or f"{cc} does not execute in this target")
 
     def _setup_pizfix(self, executor: Executor, prefix: str, version: str,
                       variant: str, unit: str) -> Install:
@@ -131,9 +151,11 @@ ls -l
             notes.append("kernel headers (/usr/include/linux) missing in the target: "
                          "install linux-headers / linux-libc-dev for full coverage")
 
+        cc = f"{prefix}/build/bin/clang"
+        self._require_runnable(executor, cc, unit)
         return Install(
             toolchain_id=self.id, kind=self.kind, source="binary",
-            cc=f"{prefix}/build/bin/clang", cxx=f"{prefix}/build/bin/clang++",
+            cc=cc, cxx=f"{prefix}/build/bin/clang++",
             version=f"{version} ({variant}, musl, clang 20.1.8)", prefix=prefix,
             env={"LD_LIBRARY_PATH": f"{prefix}/pizfix/lib64:{prefix}/pizfix/lib",
                  "FILC_ROOT": prefix},

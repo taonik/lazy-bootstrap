@@ -36,7 +36,11 @@ class ToolchainConfig:
     version: str = ""
     #: empty means "the driver default for this kind", filled in below
     provision: list[str] = field(default_factory=list)
-    variant: str = "auto"          # fil-c: auto | pizfix (musl) | optfil (glibc)
+    variant: str = "auto"            # fil-c: auto | pizfix (musl) | optfil (glibc)
+    #: also export CC/CXX next to the shim. Off by default: an exported CC
+    #: overrides the compiler autoconf derives from --host, which breaks any
+    #: package with a cross-compiled sub-build (docs/SPECS.md D-29).
+    export_cc: bool = False
     cflags: list[str] = field(default_factory=list)
     cxxflags: list[str] = field(default_factory=list)
     ldflags: list[str] = field(default_factory=list)

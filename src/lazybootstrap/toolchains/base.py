@@ -51,6 +51,42 @@ def looks_blocked(output: str) -> bool:
     return any(marker in output for marker in NETWORK_MARKERS)
 
 
+def diagnose_unrunnable(executor: Executor, binary: str, unit: str = "") -> str:
+    """Explain why an unpacked binary will not execute, in words worth reading.
+
+    A missing ELF interpreter makes execve fail with ENOENT, which every shell
+    reports as "not found" - pointing at the binary that is demonstrably right
+    there. Rather than parse the ELF (the .interp of a 146 MB clang is nowhere
+    near the first page), compare the loaders the target actually has against
+    the two that matter. Crude, but it cannot misreport.
+    """
+    script = f"""
+bin={binary}
+[ -e "$bin" ] || {{ echo MISSING_BINARY; exit 0; }}
+[ -x "$bin" ] || echo NOT_EXECUTABLE
+[ -e /lib64/ld-linux-x86-64.so.2 ] || [ -e /lib/ld-linux-x86-64.so.2 ] && echo HAVE_GLIBC_LOADER
+[ -e /lib/ld-musl-x86_64.so.1 ] && echo HAVE_MUSL_LOADER
+exit 0
+"""
+    out = executor.run(script, title="diagnose binary", unit=unit,
+                       step_prefix="toolchain").stdout
+    if "MISSING_BINARY" in out:
+        return f"{binary} is not present after unpacking"
+    if "NOT_EXECUTABLE" in out:
+        return f"{binary} is not executable after unpacking"
+    glibc = "HAVE_GLIBC_LOADER" in out
+    musl = "HAVE_MUSL_LOADER" in out
+    if not glibc and musl:
+        return (f"{binary} is there but will not run: this target is musl-only "
+                f"(/lib/ld-musl-x86_64.so.1) and has no glibc loader "
+                f"(/lib64/ld-linux-x86-64.so.2). Upstream's binary is glibc-linked "
+                f"even when it targets musl. Remedy: install gcompat / libc6-compat "
+                f"in the target, or use a glibc-based image.")
+    if not glibc and not musl:
+        return f"{binary} will not run: this target has no dynamic loader at all"
+    return ""
+
+
 def provisioning_hint(output: str, distro_id: str) -> str:
     """Turn a package-manager failure into something a human can act on."""
     if not looks_blocked(output):
@@ -166,14 +202,22 @@ class Toolchain(ABC):
 
     def environment(self, install: Install) -> dict[str, str]:
         """Environment handed to every build step of this toolchain."""
-        env = {
-            "CC": f"{SHIM_DIR}/bin/cc" if install.shimmed else install.cc,
-            "CXX": f"{SHIM_DIR}/bin/c++" if install.shimmed else (install.cxx or install.cc),
-            "LB_TOOLCHAIN": self.id,
-        }
+        env = {"LB_TOOLCHAIN": self.id}
         if install.shimmed:
             # The shim must win over /usr/bin, hence the prefix.
             env["PATH"] = f"{SHIM_DIR}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        # CC/CXX are deliberately NOT exported alongside the shim (D-29): an
+        # exported CC overrides the compiler autoconf derives from --host, so a
+        # package with a cross-compiled sub-build - gzip builds gzip.exe with
+        # --host=i686-w64-mingw32 - fails with "C compiler cannot create
+        # executables" even under plain gcc. The shim is already the stronger
+        # mechanism, because it also catches build systems that ignore CC.
+        if not install.shimmed or self.config.export_cc:
+            env["CC"] = f"{SHIM_DIR}/bin/cc" if install.shimmed else install.cc
+            env["CXX"] = (f"{SHIM_DIR}/bin/c++" if install.shimmed
+                          else (install.cxx or install.cc))
+        # The probe needs a name to invoke regardless of the above.
+        env["LB_CC"] = f"{SHIM_DIR}/bin/cc" if install.shimmed else install.cc
         cflags = " ".join(install.cflags + self.config.cflags)
         cxxflags = " ".join(install.cxxflags + self.config.cxxflags)
         ldflags = " ".join(install.ldflags + self.config.ldflags)
@@ -208,13 +252,13 @@ class Toolchain(ABC):
         binary = f"{scratch}/probe"
         executor.write_text(source, _PROBE_SOURCE)
         result = executor.run(
-            f'set -e\n"$CC" -O1 -o {binary} {source}\n{binary}\n',
+            f'set -e\n"$LB_CC" -O1 -o {binary} {source}\n{binary}\n',
             title=f"probe {self.id}", env=env, timeout=600, unit=unit, step_prefix="probe",
         )
         detail = result.output.strip()
         if not result.ok:
             return False, detail[-1500:]
-        version = executor.run('"$CC" --version 2>&1 | head -n 2', title="compiler version",
+        version = executor.run('"$LB_CC" --version 2>&1 | head -n 2', title="compiler version",
                                env=env, unit=unit, step_prefix="probe").stdout.strip()
         return True, version or detail
 

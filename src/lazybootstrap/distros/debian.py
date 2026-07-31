@@ -109,6 +109,17 @@ class DebianDistro(Distro):
             f"apt-get install -y --no-install-recommends {' '.join(packages)}",
             title="install build machinery", env=_APT_ENV, timeout=1800,
             unit=ctx.unit, step_prefix="prepare")))
+
+        # Step 4: an unprivileged account, because a buildd does not build as
+        # root and some packages refuse to (D-30). Not fatal: the build falls
+        # back to root with FORCE_UNSAFE_CONFIGURE and says so in the log.
+        steps.append(self.step("build-user", executor.run(
+            f"id {BUILD_USER} >/dev/null 2>&1 || "
+            f"useradd -m -s /bin/sh {BUILD_USER} >/dev/null 2>&1 || "
+            f"adduser -D -s /bin/sh {BUILD_USER} >/dev/null 2>&1 || true\n"
+            f"id {BUILD_USER}",
+            title="unprivileged build user", timeout=120,
+            unit=ctx.unit, step_prefix="prepare"), fatal=False))
         return steps
 
     def _enable_sources(self, executor: Executor, ctx: BuildContext) -> CommandResult:
@@ -197,16 +208,29 @@ echo "LB_VERSION=$(cd "$tree" && dpkg-parsechangelog -S Version 2>/dev/null || e
         jobs = self.jobs_expr(ctx)
         # -b: binary only (no source rebuild), -uc -us: no signing, -d: trust the
         # build-dep step above rather than re-checking (some deps are virtual).
+        # Build as an unprivileged user with fakeroot, the way a Debian buildd
+        # does (D-30). Building as real root changes package behaviour: tar's
+        # configure refuses to run at all ("you should not run configure as
+        # root"), and other packages silently take different paths. `-rfakeroot`
+        # is dpkg-buildpackage's own default for exactly this reason.
         script = f"""
 set -e
 cd {_q(tree.path)}
 DEB_BUILD_OPTIONS="${{DEB_BUILD_OPTIONS:-}} parallel={jobs} nocheck nodoc"
 export DEB_BUILD_OPTIONS="$(echo "$DEB_BUILD_OPTIONS" | tr -s ' ' | sed 's/^ //;s/ $//')"
 echo "--- compiler in use ---"
-command -v cc gcc "$CC" 2>/dev/null || true
-"${{CC:-cc}}" --version 2>&1 | head -n 2 || true
+command -v cc gcc 2>/dev/null || true
+"${{LB_CC:-cc}}" --version 2>&1 | head -n 2 || true
 echo "--- dpkg-buildpackage ---"
-dpkg-buildpackage -b -uc -us -d --jobs-force={jobs}
+if [ "$(id -u)" = 0 ] && command -v runuser >/dev/null 2>&1 \\
+   && id {BUILD_USER} >/dev/null 2>&1 && command -v fakeroot >/dev/null 2>&1; then
+    chown -R {BUILD_USER}:{BUILD_USER} . .. 2>/dev/null || true
+    runuser -u {BUILD_USER} -- env {_forwarded_env()} \\
+        dpkg-buildpackage -b -uc -us -d -rfakeroot --jobs-force={jobs}
+else
+    echo "[lazy-bootstrap] building as root: no {BUILD_USER} user or no fakeroot" >&2
+    FORCE_UNSAFE_CONFIGURE=1 dpkg-buildpackage -b -uc -us -d -rfakeroot --jobs-force={jobs}
+fi
 """
         return executor.run(script, title=f"build {tree.name}", env=ctx.env,
                             cwd=tree.path, timeout=ctx.timeout, unit=ctx.unit,
@@ -233,6 +257,21 @@ _APT_ENV = {
     "APT_LISTCHANGES_FRONTEND": "none",
     "LC_ALL": "C.UTF-8",
 }
+
+
+#: Unprivileged account the build runs under, created by prepare_builder (D-30).
+BUILD_USER = "lbbuild"
+
+#: `runuser -u` resets the environment, so the toolchain's variables have to be
+#: forwarded explicitly. PATH carries the shim, which is the whole mechanism.
+_FORWARD = ("PATH", "LB_TOOLCHAIN", "LB_CC", "CC", "CXX", "DEB_BUILD_OPTIONS",
+            "DEB_CFLAGS_APPEND", "DEB_CXXFLAGS_APPEND", "DEB_LDFLAGS_APPEND",
+            "FILC_ROOT", "SOURCE_DATE_EPOCH", "HOME", "LC_ALL", "LANG")
+
+
+def _forwarded_env() -> str:
+    """`VAR="$VAR"` for every variable the build needs across runuser."""
+    return " ".join(f'{name}="${{{name}:-}}"' for name in _FORWARD)
 
 
 def _q(value: str) -> str:

@@ -79,6 +79,17 @@ def build_parser() -> argparse.ArgumentParser:
     rebuild.add_argument("--dry-run", action="store_true",
                          help="plan and print the units, build nothing")
 
+    # -- toolchain ---------------------------------------------------------
+    tc = sub.add_parser("toolchain",
+                        help="provision a toolchain into a target and prove it works")
+    tc.add_argument("action", choices=["check"],
+                    help="check: provision the toolchain and compile+run a program, "
+                         "without preparing the distro's build machinery")
+    _add_target_args(tc)
+    tc.add_argument("-t", "--toolchain", dest="toolchains_cli", action="append",
+                    metavar="ID", help="toolchain to check (repeatable)")
+    tc.add_argument("--json", action="store_true")
+
     # -- env ---------------------------------------------------------------
     env = sub.add_parser("env", help="query the execution-environment orchestrator")
     # `action` first: the optional image positional would otherwise swallow it.
@@ -403,6 +414,57 @@ def cmd_rebuild(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_toolchain(args: argparse.Namespace) -> int:
+    """Answer "does this toolchain work on this target?" on its own.
+
+    Deliberately separate from `rebuild`: a toolchain that ships its own clang
+    and runtime needs nothing from the distro's archives, so it can be verified
+    even where those archives are unreachable. Conflating the two would report
+    a network limit as a broken toolchain (docs/SPECS.md D-20, D-31).
+    """
+    from . import toolchains as toolchains_mod
+
+    cfg = resolve_config(args)
+    tracer = make_tracer(args)
+    eng = engine_mod.Engine(cfg, tracer)
+    results = []
+    rc = 0
+    env = eng.open_environment("lb-toolchain-check")
+    try:
+        for entry in cfg.toolchains:
+            driver = toolchains_mod.get(entry)
+            row = {"id": entry.id, "kind": driver.kind, "ok": False,
+                   "source": "", "version": "", "detail": ""}
+            try:
+                install = driver.provision(env.executor, env.distro.id, env.facts,
+                                           eng.fetcher, unit="check", sysdeps=env.sysdeps)
+                row["source"], row["version"] = install.source, install.version
+                ok, detail = driver.probe(env.executor, install, unit="check",
+                                          workdir=eng.workdir)
+                row["ok"], row["detail"] = ok, detail.strip()
+            except Exception as exc:  # noqa: BLE001 - reported per toolchain
+                row["detail"] = str(exc).strip()
+            results.append(row)
+            rc = rc or (0 if row["ok"] else 1)
+    finally:
+        env.close()
+
+    if args.json:
+        print(json.dumps({"image": cfg.image, "distro": env.facts.get("id", ""),
+                          "libc": env.facts.get("libc", ""), "toolchains": results}, indent=2))
+        return rc
+    print(f"target    : {cfg.image or '(host)'}  "
+          f"[{env.facts.get('id','?')} {env.facts.get('version','')}, "
+          f"{env.facts.get('arch','?')}, {env.facts.get('libc','?')}]")
+    for row in results:
+        mark = "ok    " if row["ok"] else "FAILED"
+        print(f"  {mark} {row['id']:<14} {row['version'] or '-':<40} "
+              f"{('from ' + row['source']) if row['source'] else ''}")
+        for line in [l for l in row["detail"].splitlines() if l.strip()][:6]:
+            print(f"         {line.strip()[:160]}")
+    return rc
+
+
 def cmd_env(args: argparse.Namespace) -> int:
     """The orchestrator, exposed on its own: query it, or pre-warm an environment.
 
@@ -551,6 +613,7 @@ def _emit(text: str, output: str | None) -> None:
 
 COMMANDS = {
     "doctor": cmd_doctor,
+    "toolchain": lambda args: cmd_toolchain(args),
     "env": lambda args: cmd_env(args),
     "build-worker": lambda args: cmd_build_worker(args),
     "inventory": cmd_inventory,

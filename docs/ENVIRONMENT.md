@@ -45,8 +45,8 @@ permitted host can satisfy.
 
 | host | consequence |
 |---|---|
-| `deb.debian.org` and every Debian mirror tried | **no Debian source packages, no Debian build-dependencies** |
-| `dl-cdn.alpinelinux.org` and every Alpine mirror tried | **no Alpine packages: `apk` cannot install anything** |
+| `deb.debian.org` **and 19 other Debian mirrors** | **no Debian source packages, no Debian build-dependencies** |
+| `dl-cdn.alpinelinux.org` **and 10 other Alpine mirrors** | **no Alpine packages: `apk` cannot install anything** |
 | `salsa.debian.org`, `sources.debian.org`, `snapshot.debian.org` | no alternative route to Debian sources |
 | `git.alpinelinux.org`, `gitlab.alpinelinux.org` | (mitigated: `aports` is mirrored on GitHub) |
 | `production.cloudflare.docker.com`, `production.cloudfront.docker.com` | Docker Hub **blobs**: `podman pull docker.io/...` fails after resolving the manifest |
@@ -59,10 +59,34 @@ permitted host can satisfy.
 |---|---|---|
 | `debian:13-slim` | ✅ (reads the image's own dpkg database) | ⛔ `blocked` — `deb.debian.org` unreachable |
 | `alpine` (± `libc6-compat`) | ✅ (reads `/lib/apk/db/installed`) | ⛔ `blocked` — `dl-cdn.alpinelinux.org` unreachable |
-| `ubuntu:24.04` | ✅ | ✅ end to end, including the toolchain matrix |
+| `ubuntu:24.04` | ✅ | ✅ end to end (used only to exercise the pipeline itself) |
+
+Separately from rebuilds, `lazy-bootstrap toolchain check` answers the other
+half of the question — does the toolchain itself work on the target — because
+Fil-C and LLVM come from GitHub, which *is* reachable:
+
+| target | gcc | llvm | filc-0.681 |
+|---|---|---|---|
+| `debian:13` | ⛔ archive | ⛔ archive | ✅ provisioned, compiles and runs |
+| `alpine` | ⛔ archive | ⛔ archive | ❌ musl-only target cannot run the glibc-linked clang (D-13 corrected) |
 
 `blocked` is a first-class status precisely so this shows up as an environment
 limit rather than as a package that "fails to compile".
+
+Mirrors were not assumed unreachable, they were measured. 20 Debian mirrors
+(`ftp.{us,de,uk,fr,it,nl}.debian.org`, `mirrors.kernel.org`, `debian.osuosl.org`,
+`mirrors.mit.edu`, `mirror.csclub.uwaterloo.ca`, `mirrors.ocf.berkeley.edu`,
+`cloudfront.debian.net`, …) and 11 Alpine mirrors (`mirrors.edge.kernel.org`,
+`uk.alpinelinux.org`, `mirror.leaseweb.com`, `mirrors.aliyun.com`,
+`mirrors.tuna.tsinghua.edu.cn`, …) all return the same thing — the proxy's own
+log is unambiguous:
+
+```
+connect_rejected: gateway answered 403 to CONNECT (policy denial or upstream failure)
+```
+
+This is the environment's network policy, which the account owner chooses when
+creating the environment. It is not something the tool can or should work around.
 
 ### To lift the limitation
 

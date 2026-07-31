@@ -445,6 +445,89 @@ emulato completi il boot. Su una macchina con KVM il percorso è quello standard
 Non è stato aggiunto un finto "successo" per questa classe: un caso di test che
 non ha mai eseguito il boot deve risultare *skip*, non *pass*.
 
+### D-29 — Non esportare `CC`/`CXX` accanto allo shim (correzione)
+Esportavo `CC`/`CXX` *insieme* allo shim in `PATH`, come "belt-and-braces". È
+sbagliato, e lo è in un modo che **falsava la baseline**.
+
+`gzip` costruisce anche `gzip.exe` per il pacchetto `gzip-win32`, con un
+sotto-configure `--host=i686-w64-mingw32`. Autoconf, se trova `CC`
+nell'ambiente, lo usa **al posto** del compilatore derivato da `--host`.
+Riproduzione minima, con le mingw regolarmente installate:
+
+| ambiente | `CC` scelto da configure | esito |
+|---|---|---|
+| senza `CC` esportato | `i686-w64-mingw32-gcc` | ✅ |
+| con `CC=/usr/bin/gcc` | `/usr/bin/gcc` | ❌ `C compiler cannot create executables` |
+
+Quindi `gzip` risultava "fallito" **anche con gcc**, e ogni confronto che lo
+includeva era falsato in partenza. Lo shim in `PATH` resta il meccanismo (D-11)
+ed è sufficiente: `make` cerca `cc`, autoconf prova `gcc` poi `cc`, cmake
+idem — tutti passano dallo shim. Un `--host=<triplet>` invece cerca
+`<triplet>-gcc`, che nello shim **non** c'è, e trova il cross compilatore vero.
+Il probe usa `LB_CC`, che è interno e non interferisce. `export_cc = true` per
+chi lo rivuole.
+
+### D-30 — Compilare come utente non privilegiato, come fa un buildd
+`tar` non compilava: `configure: error: you should not run configure as root`.
+Non è una toolchain che fallisce, è il mio harness che costruisce da root mentre
+un buildd Debian costruisce da utente normale con `fakeroot` — tanto che
+`-rfakeroot` è il default di `dpkg-buildpackage`.
+
+* **Alternative** — (a) `FORCE_UNSAFE_CONFIGURE=1`; (b) creare un utente e
+  costruire con `runuser` + `fakeroot`.
+* **Presa: (b)**, con (a) come ripiego se `runuser`/`fakeroot` mancano.
+* **Perché** — (a) zittisce *quel* controllo ma lascia tutto il resto diverso da
+  una build reale: permessi, test suite, pacchetti che si comportano
+  diversamente da root. Se il punto è "questo pacchetto si ricompila", allora va
+  ricompilato nelle condizioni in cui lo si ricompila davvero.
+* **Costo** — `runuser` azzera l'ambiente, quindi le variabili della toolchain
+  vanno inoltrate esplicitamente (`_FORWARD` in `debian.py`). `PATH` è la più
+  importante: porta lo shim.
+
+### D-31 — "La toolchain funziona qui" è una domanda separata da "l'archivio è raggiungibile"
+`lazy-bootstrap toolchain check <target>` provisiona una toolchain ed esegue
+compile+run, **senza** preparare la build machinery della distro.
+
+* **Perché** — Fil-C e LLVM arrivano da GitHub; gcc e clang dall'archivio della
+  distro. Dove l'archivio è irraggiungibile ma GitHub no, la prima domanda ha
+  una risposta e la seconda no. Un unico comando che le mescola riporterebbe un
+  limite di rete come toolchain rotta — l'errore che D-20 esiste per evitare.
+
+### D-13 (correzione) — "pizfix = musl" riguarda il *bersaglio*, non l'eseguibile
+Avevo scritto che su target musl si usa il build pizfix perché "self-contained".
+Provandolo su `alpine` puro:
+
+```
+/opt/.../filc-0.681/build/bin/clang: not found      # ma il file c'è
+readelf -l clang-20 -> /lib64/ld-linux-x86-64.so.2
+readelf -d clang-20 -> libc.so.6, libm.so.6
+```
+
+Il **driver clang di Fil-C è linkato a glibc** anche nella variante pizfix: è il
+*sysroot* a essere musl, non il compilatore. Su alpine puro non parte proprio.
+La scelta della variante per libc (D-13) resta giusta per ciò che si *produce*;
+quello che mancava è che il target deve comunque saper **eseguire** il
+compilatore. Da qui la specifica originale `alpine + libc6-compat`: gcompat
+serve prima ancora che ai pacchetti, al compilatore stesso.
+
+Ora il fallimento è diagnosticato: si confrontano i loader presenti nel target
+invece di fidarsi di `execve`, che per un interprete ELF mancante restituisce
+ENOENT e quindi un "not found" che punta al file sbagliato.
+
+### D-32 — Nomi delle varianti e nomi degli asset non sono la stessa stringa
+Costruivo l'URL come `{variante}-{versione}-linux-x86_64.tar.xz`, con variante
+`pizfix` o `optfil`. Ma upstream pubblica il build musl come **`filc-*`**:
+
+| asset | HTTP |
+|---|---|
+| `filc-0.681-linux-x86_64.tar.xz` | 200 |
+| `optfil-0.681-linux-x86_64.tar.xz` | 200 |
+| `pizfix-0.681-linux-x86_64.tar.xz` | **404** |
+
+Ogni provisioning musl faceva 404. Ora la mappa variante→asset è esplicita
+(`ASSET_PREFIX`) e c'è un test che la fissa. Vale come regola generale: quando
+un identificatore interno finisce dentro un URL, va mappato, non concatenato.
+
 ---
 
 ## 5. Reporting
@@ -544,3 +627,4 @@ invece di scrivere i workflow di corsa.
 | 4 | 2026-07-31 | D-25/D-26: matrice backend x rootfs, worker su qualsiasi classe. |
 | 5 | 2026-07-31 | D-27: orchestrazione estratta come componente indipendente. |
 | 6 | 2026-07-31 | D-28: classe VM (interfaccia generica + driver qemu). |
+| 7 | 2026-07-31 | D-29..D-32 dai primi confronti reali: due bug che falsavano la baseline (CC esportato, build da root), l'asset musl di Fil-C, e la correzione a D-13. |
