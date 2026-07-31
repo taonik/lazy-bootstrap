@@ -251,6 +251,25 @@ class Toolchain(ABC):
         env.update(self.config.env)
         return env
 
+    @staticmethod
+    def _probe_hint(output: str) -> str:
+        """Separate "the compiler is broken" from "the target has no libc".
+
+        A freshly unpacked clang on a runtime-only image compiles nothing, not
+        because it is broken but because there are no headers to compile
+        against. Reporting that as a toolchain failure would be the same
+        category error as reporting a blocked archive as a build failure.
+        """
+        for header in ("stdio.h", "stdlib.h", "features.h"):
+            if f"'{header}' file not found" in output or f"{header}: No such file" in output:
+                return ("the toolchain works, but this target has no C library "
+                        "headers (install libc6-dev / musl-dev / libc-dev). "
+                        "Nothing is wrong with the compiler.")
+        if "cannot find -lc" in output or "unable to find library -lc" in output:
+            return ("the toolchain works, but this target has no C library to "
+                    "link against (install libc6-dev / musl-dev).")
+        return ""
+
     def probe(self, executor: Executor, install: Install, unit: str = "",
               workdir: str = "/build") -> tuple[bool, str]:
         """Compile and run a hello-world with this toolchain.
@@ -271,7 +290,8 @@ class Toolchain(ABC):
         )
         detail = result.output.strip()
         if not result.ok:
-            return False, detail[-1500:]
+            hint = self._probe_hint(detail)
+            return False, (f"{hint}\n{detail[-1200:]}" if hint else detail[-1500:])
         version = executor.run('"$LB_CC" --version 2>&1 | head -n 2', title="compiler version",
                                env=env, unit=unit, step_prefix="probe").stdout.strip()
         return True, version or detail

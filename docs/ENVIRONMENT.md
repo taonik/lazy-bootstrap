@@ -63,11 +63,14 @@ permitted host can satisfy.
 
 Separately from rebuilds, `lazy-bootstrap toolchain check` answers the other
 half of the question — does the toolchain itself work on the target — because
-Fil-C and LLVM come from GitHub, which *is* reachable:
+Fil-C and LLVM come from GitHub, which *is* reachable. `llvm-20.1.8` probes
+short of compiling only because `debian:13` carries no libc headers, which
+again come from the blocked archive:
 
 | target | gcc | llvm | filc-0.681 |
 |---|---|---|---|
 | `debian:13` | ⛔ archive | ⛔ archive | ✅ provisioned, compiles and runs |
+| `debian:13`, `llvm-20.1.8` | — | ✅ provisioned from the upstream 1.9 GiB tarball, exact version | — |
 | `alpine` | ⛔ archive | ⛔ archive | ❌ musl-only target cannot run the glibc-linked clang (D-13 corrected) |
 | `alpine` + a glibc loader | ⛔ archive | ⛔ archive | ⚠️ clang runs and identifies itself; then needs `ld` from binutils, which needs apk |
 

@@ -611,6 +611,52 @@ serve una glibc vera. La diagnosi ora distingue i tre casi — loader assente,
 loader presente ma simboli mancanti, binario che parte — perché portano a rimedi
 completamente diversi.
 
+### D-34 — Archivi grandi: streaming, non materializzazione (e stdin va chiesto)
+Provisionare `llvm-20.1.8` ha esaurito il disco della macchina, e la causa non
+era la dimensione della toolchain ma il percorso di scompattamento.
+
+Quando il target non ha `xz` — cosa che accade ogni volta che il suo archivio
+pacchetti è irraggiungibile, visto che `xz-utils` viene da lì — l'archivio
+veniva decompresso in un `.tar` sull'host e quel tar veniva **copiato dentro**
+l'ambiente:
+
+| passo | costo |
+|---|---|
+| download `.tar.xz` | 1,9 GiB |
+| decompressione sull'host | ~8 GiB |
+| copia dentro l'ambiente | ~8 GiB |
+| installazione finale | ~8 GiB |
+| **totale** | **~25 GiB per installarne 8** |
+
+`Executor` guadagna una primitiva, `feed`: esegue un produttore sull'host e ne
+convoglia lo stdout dentro l'ambiente. Lo scompattamento di ripiego ora fa
+`xz -dc | tar -x`, quindi **nulla di intermedio viene mai scritto**.
+
+**Trabocchetto trovato subito dopo**: `podman exec` lascia lo stdin chiuso se
+non gli si passa `-i`. L'archivio non arrivava a `tar`, che rispondeva
+`This does not look like a tar archive` — un messaggio che accusa l'archivio
+invece della pipe vuota che ha effettivamente letto. Da qui `_wrap_stdin`,
+sovrascritto solo dal backend OCI.
+
+**Esito**: `llvm-20.1.8` si provisiona (versione esatta, dal tarball upstream,
+senza sostituzioni — D-12) su `debian:13`.
+
+### D-35 — "Manca la libc" non è "la toolchain è rotta"
+Il probe di `llvm-20.1.8` su `debian:13` fallisce così:
+
+```
+probe.c:2:10: fatal error: 'stdio.h' file not found
+```
+
+Un clang appena scompattato su un'immagine *runtime-only* non compila nulla
+perché non ci sono intestazioni contro cui compilare, non perché sia rotto.
+Riportarlo come toolchain fallita sarebbe lo stesso errore di categoria di
+riportare un archivio bloccato come fallimento di build (D-20). Il probe ora
+riconosce il caso e lo dice:
+
+> the toolchain works, but this target has no C library headers
+> (install libc6-dev / musl-dev / libc-dev). Nothing is wrong with the compiler.
+
 ---
 
 ## 5. Reporting

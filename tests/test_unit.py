@@ -173,6 +173,14 @@ class TestShim(unittest.TestCase):
         self.assertIn("-l/opt/fil/lib", body)
         self.assertIn("--ignore-missing-info", body)
 
+    def test_missing_libc_headers_are_not_a_broken_toolchain(self):
+        # A freshly unpacked clang on a runtime-only image compiles nothing
+        # because there are no headers, not because it is broken (D-34).
+        hint = Toolchain._probe_hint("probe.c:2:10: fatal error: 'stdio.h' file not found")
+        self.assertIn("no C library headers", hint)
+        self.assertIn("libc6-dev", hint)
+        self.assertEqual(Toolchain._probe_hint("error: too few arguments"), "")
+
     def test_environment_puts_the_shim_first_on_path(self):
         driver = _FakeToolchain(ToolchainConfig(id="fake"))
         install = Install("fake", "fake", "distro", cc="/x/cc", cxx="/x/c++", shimmed=True)
