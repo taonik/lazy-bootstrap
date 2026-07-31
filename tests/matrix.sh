@@ -75,7 +75,7 @@ main() {
             --only) ONLY="$2"; shift 2 ;;
             --out) OUT="$2"; shift 2 ;;
             --list)
-                printf 'cases: unit host chroot-image chroot-hostfs bwrap firejail podman docker shell\n'
+                printf 'cases: unit host chroot-image chroot-hostfs bwrap firejail podman docker vm shell\n'
                 exit 0 ;;
             *) printf 'unknown option: %s\n' "$1" >&2; exit 2 ;;
         esac
@@ -169,6 +169,25 @@ main() {
             run_case docker-inventory "$LB" inventory "$IMAGE" --backend docker "${MIRROR_ARGS[@]}"
         else
             meh docker "docker daemon unavailable"
+        fi
+    fi
+
+    # -- 4b. vm class ------------------------------------------------------
+    if selected vm; then
+        say "vm class: qemu"
+        if ! command -v qemu-system-x86_64 >/dev/null; then
+            meh vm "qemu-system-x86_64 not installed"
+        elif [ -z "${LB_TEST_VM_IMAGE:-}" ]; then
+            # A VM boots a disk image, not a container image, so there is
+            # nothing sensible to default to. Point at one to enable this case:
+            #   LB_TEST_VM_IMAGE=/path/disk.qcow2 LB_TEST_VM_KEY=... tests/matrix.sh
+            meh vm "set LB_TEST_VM_IMAGE (and LB_TEST_VM_KEY / LB_TEST_VM_SEED)"
+        else
+            run_case vm-available "$LB" env available "$LB_TEST_VM_IMAGE" --backend vm
+            run_case vm-ensure "$LB" env ensure "$LB_TEST_VM_IMAGE" --backend vm \
+                --vm-option "SSH_KEY=${LB_TEST_VM_KEY:-}" \
+                --vm-option "SEED=${LB_TEST_VM_SEED:-}" \
+                --vm-option "BOOT_TIMEOUT=${LB_TEST_VM_BOOT_TIMEOUT:-600}"
         fi
     fi
 

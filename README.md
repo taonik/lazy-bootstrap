@@ -55,6 +55,7 @@ choices, and any combination is valid.
 | `bwrap` | namespaces | bubblewrap |
 | `firejail` | namespaces | firejail with `chroot yes` |
 | `oci` / `podman` / `docker` | full | a container engine |
+| `vm` / `qemu` | a whole kernel | qemu (KVM optional), ssh, a bootable disk image |
 
 | `--rootfs` | filesystem source |
 |---|---|
@@ -255,11 +256,34 @@ profiles/                 ready-made runs
 docs/SPECS.md             design decisions and why
 ```
 
+### Virtual machines
+
+The VM class uses the same `Executor` contract; what it adds is a transport
+(ssh into the guest). `VmDriver` is the seam other hypervisors plug into —
+libvirt, VirtualBox, a cloud API — and only qemu is implemented, on purpose.
+Naming an unimplemented one says so, rather than "unknown option".
+
+```console
+$ ./lazy-bootstrap env available disk.qcow2 --backend vm
+$ ./lazy-bootstrap env ensure disk.qcow2 --backend vm \
+      --vm-option SSH_KEY=id_lb --vm-option SEED=seed.img
+```
+
+KVM is an optimisation, not a requirement: without `/dev/kvm` the guest runs
+under TCG emulation and says so. And nothing is ever pulled implicitly for a VM
+— a container image is not a bootable disk, so `--image debian:13-slim` is
+reported as such instead of failing obscurely later.
+
 ## Status
 
-Working today: Debian/Ubuntu and Alpine; gcc, clang and Fil-C; host, chroot,
-bubblewrap, firejail and podman/docker; worker construction and rebuild on all
-of them; text/markdown/json/html reporting and run comparison.
+Working and tested end to end: Debian/Ubuntu and Alpine; gcc, clang and Fil-C;
+the host, chroot, bubblewrap, firejail and podman classes, for both worker
+construction and rebuilds; text/markdown/json/html reporting and run
+comparison; the orchestration interface with its acquisition policy.
 
-Next: the VM class (qemu/kvm first, behind the same generic interface), and
-full bootstrap with optional recompilation.
+Implemented but not fully exercised here: docker (no daemon in the development
+environment) and the VM class (no KVM, and emulation is cut short — see
+docs/ENVIRONMENT.md). Both are covered by capability probes that skip rather
+than pretend.
+
+Next: full bootstrap with optional recompilation.

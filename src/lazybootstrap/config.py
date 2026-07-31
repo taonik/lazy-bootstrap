@@ -103,6 +103,8 @@ class RunConfig:
     #: what the orchestrator may do to obtain the environment (D-27):
     #: auto (pull if missing) | require (never fetch) | download | build
     acquire: str = "auto"
+    #: VM driver settings, passed through as LB_VM_<KEY> (docs/SPECS.md D-28)
+    vm_options: dict[str, str] = field(default_factory=dict)
     engine: str = "podman"                  # oci backend: podman | docker
     grouping: str = "all"                   # all | package | group
     group_size: int = 20                    # grouping=group

@@ -83,6 +83,29 @@ Nothing in the tool needs changing: `--registry-mirror` and `--source-mirror`
 already exist for exactly this, and the profiles in `profiles/` set the mirror
 this environment needs.
 
+## Virtualisation
+
+| | |
+|---|---|
+| `/dev/kvm` | absent |
+| nested virtualisation | absent (no `vmx`/`svm` in `/proc/cpuinfo`) |
+| qemu | installable from the Ubuntu archive, runs in TCG (emulation) |
+| `cloud-images.ubuntu.com` | reachable, so a bootable guest *can* be obtained |
+
+qemu starts and accepts the generated command line here, but sustained emulation
+is terminated by the sandbox (the shell returns 144) long before an emulated
+Ubuntu guest finishes booting. The VM class is therefore implemented and its
+capability/availability paths are verified, while **a full guest boot is not
+validated in this environment** (docs/SPECS.md D-28). On a host with KVM:
+
+```console
+$ ./lazy-bootstrap env available disk.qcow2 --backend vm
+$ ./lazy-bootstrap env ensure disk.qcow2 --backend vm \
+      --vm-option SSH_KEY=id_lb --vm-option SEED=seed.img
+$ LB_TEST_VM_IMAGE=disk.qcow2 LB_TEST_VM_KEY=id_lb LB_TEST_VM_SEED=seed.img \
+      tests/matrix.sh --only vm
+```
+
 ## Quirks worth knowing
 
 * **`df` lies.** The writable allowance is per session; "no space left on

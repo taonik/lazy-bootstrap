@@ -13,6 +13,8 @@ from .chroot import ChrootExecutor
 from .firejail import FirejailExecutor
 from .host import HostExecutor
 from .oci import OciExecutor
+from .vm import VmExecutor
+from .vm import probe as probe_vm
 
 BACKENDS: dict[str, type[Executor]] = {
     "host": HostExecutor,
@@ -23,11 +25,14 @@ BACKENDS: dict[str, type[Executor]] = {
     "oci": OciExecutor,
     "podman": OciExecutor,
     "docker": OciExecutor,
+    "vm": VmExecutor,
+    "qemu": VmExecutor,
 }
 
 # Backends that run inside an image and therefore need a rootfs or an OCI ref.
 NEEDS_ROOTFS = {"bwrap", "bubblewrap", "firejail", "chroot"}
 NEEDS_IMAGE = {"oci", "podman", "docker"}
+NEEDS_GUEST = {"vm", "qemu"}
 
 
 def create(spec: ExecutorSpec, tracer: Tracer | None = None) -> Executor:
@@ -37,10 +42,14 @@ def create(spec: ExecutorSpec, tracer: Tracer | None = None) -> Executor:
         raise ExecutorError(
             f"unknown backend {spec.kind!r}; known: {', '.join(sorted(set(BACKENDS)))}"
         ) from None
-    # `--backend podman` / `--backend docker` are shorthands for oci+engine.
+    # `--backend podman` / `--backend docker` are shorthands for oci+engine,
+    # and `--backend qemu` for vm+driver.
     if spec.kind in ("podman", "docker"):
         spec.engine = spec.kind
         spec.kind = "oci"
+    elif spec.kind == "qemu":
+        spec.engine = "qemu"
+        spec.kind = "vm"
     return cls(spec, tracer)
 
 
@@ -111,7 +120,10 @@ def probe() -> dict[str, dict[str, str]]:
                            "detail": "hostfs rootfs can use copy-on-write" if overlay
                                      else "hostfs rootfs falls back to copy mode"}
 
-    for helper in ("skopeo", "umoci", "patchelf", "curl", "tar", "xz", "mount"):
+    for driver, info in probe_vm().items():
+        report[f"vm/{driver}"] = info
+
+    for helper in ("skopeo", "umoci", "patchelf", "curl", "tar", "xz", "mount", "ssh"):
         path = shutil.which(helper)
         report[helper] = {"available": "yes" if path else "no", "detail": path or "not installed"}
 
@@ -124,6 +136,7 @@ def _first_line(text: str) -> str:
 
 __all__ = [
     "BACKENDS",
+    "NEEDS_GUEST",
     "CommandResult",
     "Executor",
     "ExecutorError",

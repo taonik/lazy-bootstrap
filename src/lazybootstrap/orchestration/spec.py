@@ -58,10 +58,12 @@ class EnvironmentRequest:
     registry_mirrors: dict[str, str] = field(default_factory=dict)
 
     def describe(self) -> str:
-        where = self.backend
         if self.backend in ("oci", "podman", "docker"):
-            return f"{where}:{self.image or '?'}"
-        return f"{where}:{self.rootfs or 'image'}"
+            return f"{self.backend}:{self.image or '?'}"
+        if self.backend in ("vm", "qemu"):
+            return f"vm/{self.engine if self.engine in ('qemu', 'libvirt') else 'qemu'}:" \
+                   f"{self.image or self.rootfs or '?'}"
+        return f"{self.backend}:{self.rootfs or 'image'}"
 
 
 @dataclass

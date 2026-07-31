@@ -395,6 +395,56 @@ report) più le chiamate all'interfaccia. Non è però "un set minimo di script 
 l'host + invocazioni all'orchestratore per il resto": il dominio non distingue
 l'host dagli altri, perché non ne ha motivo.
 
+### D-28 — Classe VM: interfaccia generica, un solo driver reale
+Requisito: VM bare qemu/kvm e libvirt, con interfaccia generica per altri engine
+(VirtualBox, cloud, ...), ma **supporto effettivo solo per qemu/kvm**.
+
+* **Cosa cambia rispetto alle altre classi** — Nulla, sul contratto: `Executor`
+  chiede "esegui uno script sh" e "sposta file", e una VM lo soddisfa come un
+  container. Cambia il **trasporto**: i comandi devono attraversare il confine.
+  * `ssh` — richiede sshd nel guest; è la risposta generale, ed è anche ciò che
+    servirà per libvirt, per una VM remota e per un'istanza cloud. È il trasporto
+    implementato.
+  * condivisione di directory (virtio-9p) — predisposta per guest senza sshd.
+* **Il seam per gli altri engine è `VmDriver`**: tre metodi (`available`, `start`,
+  `stop`). Un driver deve solo avviare un guest e dire come raggiungerlo; tutto il
+  resto (shell, copia file, tracciamento) è già scritto una volta sola.
+* **I driver non implementati sono elencati lo stesso** (`libvirt`, `virtualbox`,
+  `cloud`): `--engine libvirt` risponde "non ancora implementato, ecco l'interfaccia"
+  invece di "opzione sconosciuta". Sono due informazioni diverse per chi legge.
+* **Niente acquisizione implicita di un disco.** Per le altre classi `--acquire auto`
+  può scaricare un'immagine OCI; per la VM no, e di proposito: *un'immagine container
+  non è un disco avviabile*. Se `--image` punta a un riferimento tipo
+  `debian:13-slim`, `available()` lo dice esplicitamente invece di provare a
+  scaricarlo e fallire più tardi in modo oscuro.
+* **KVM è un'ottimizzazione, non un requisito**: `accel=auto` usa KVM se c'è
+  `/dev/kvm`, altrimenti TCG (emulazione: corretta, molto più lenta) e lo dichiara
+  con un warning. Rifiutarsi senza KVM renderebbe la classe inutilizzabile proprio
+  negli ambienti in cui serve di più (CI, container senza virtualizzazione annidata).
+* **Sonda di prontezza: il banner SSH, non la porta.** La rete user-mode di qemu
+  accetta la connessione sulla porta inoltrata dall'istante in cui parte e solo
+  dopo la resetta: un `connect()` riuscito non significa niente. Il primo byte che
+  può arrivare solo da un sshd vivo è `SSH-`. (Sbagliato al primo tentativo,
+  corretto dopo averlo osservato.)
+
+#### Stato della validazione (onesto)
+| aspetto | stato |
+|---|---|
+| interfaccia `VmDriver` e registro dei driver | implementata, coperta da test |
+| `probe()` / `available()` per la classe VM | implementati e verificati |
+| costruzione della riga di comando qemu | verificata (qemu la accetta e riporta errori propri, es. il lock del disco) |
+| **boot completo di un guest** | **non verificato in questo ambiente** |
+
+L'ambiente di sviluppo non ha `/dev/kvm` né virtualizzazione annidata, quindi qemu
+può girare solo in TCG; e l'esecuzione prolungata di qemu viene terminata dalla
+sandbox (exit 144) dopo poche decine di secondi, ben prima che un guest Ubuntu
+emulato completi il boot. Su una macchina con KVM il percorso è quello standard
+(cloud image + seed cloud-init + inoltro di porta), ed è documentato in
+`tests/matrix.sh` come caso attivabile con `LB_TEST_VM_IMAGE`.
+
+Non è stato aggiunto un finto "successo" per questa classe: un caso di test che
+non ha mai eseguito il boot deve risultare *skip*, non *pass*.
+
 ---
 
 ## 5. Reporting
@@ -490,3 +540,7 @@ invece di scrivere i workflow di corsa.
 |---|---|---|
 | 1 | 2026-07-31 | Impianto iniziale: D-01…D-21. |
 | 2 | 2026-07-31 | Aggiunti gemello Bash (D-01), tracing/replay (D-17, D-18) su richiesta. |
+| 3 | 2026-07-31 | D-22..D-24 emersi dalle prime build reali (flag LTO, shlibdeps, system-deps). |
+| 4 | 2026-07-31 | D-25/D-26: matrice backend x rootfs, worker su qualsiasi classe. |
+| 5 | 2026-07-31 | D-27: orchestrazione estratta come componente indipendente. |
+| 6 | 2026-07-31 | D-28: classe VM (interfaccia generica + driver qemu). |

@@ -24,7 +24,8 @@ from pathlib import Path
 
 from . import rootfs as rootfs_mod
 from . import util
-from .executors import NEEDS_ROOTFS, ExecutorSpec, create
+from .executors import NEEDS_GUEST, NEEDS_ROOTFS, ExecutorSpec, create
+from .executors.vm import get_driver, resolve_driver_name
 from .executors import probe as probe_backends
 from .images import ImageStore, apply_mirrors
 from .logs import get
@@ -63,11 +64,39 @@ class Orchestrator:
         if backend in ("oci", "podman", "docker"):
             return self._image_availability(request)
 
-        if backend in NEEDS_ROOTFS or backend == "vm":
+        if backend in NEEDS_GUEST:
+            return self._guest_availability(request)
+
+        if backend in NEEDS_ROOTFS:
             return self._rootfs_availability(request)
 
         return Availability(satisfied=False, action=UNAVAILABLE,
                             detail=f"unknown backend {backend!r}")
+
+    def _guest_availability(self, request: EnvironmentRequest) -> Availability:
+        """A VM needs a hypervisor and something bootable; neither is fetched
+        implicitly, because a disk image is not a container image."""
+        try:
+            driver = get_driver(resolve_driver_name(request.engine))
+        except Exception as exc:  # noqa: BLE001 - reported, not raised
+            return Availability(satisfied=False, action=UNAVAILABLE, detail=str(exc))
+        ok, detail = driver.available()
+        if not ok:
+            return Availability(satisfied=False, action=UNAVAILABLE, detail=detail)
+        if not shutil.which("ssh"):
+            return Availability(satisfied=False, action=UNAVAILABLE,
+                                detail="no ssh client on the host")
+        guest = request.image or request.rootfs
+        if not guest:
+            return Availability(satisfied=False, action=UNAVAILABLE,
+                                detail="no disk image (--image) or rootfs to share (--rootfs)")
+        if request.image and not Path(request.image).exists():
+            return Availability(
+                satisfied=False, action=UNAVAILABLE,
+                detail=f"{request.image} is not a file on this machine. A VM boots a "
+                       "disk image, not a container image: build one first (a cloud "
+                       "image plus cloud-init is the usual route)")
+        return Availability(satisfied=True, action=NONE, where=f"{driver.name}: {detail}")
 
     def _image_availability(self, request: EnvironmentRequest) -> Availability:
         engine = request.engine or "podman"
@@ -152,6 +181,10 @@ class Orchestrator:
             store = self._store(request)
             spec.image = store.pull(request.image)
             handle.image = spec.image
+        elif request.backend in NEEDS_GUEST:
+            spec.image = request.image
+            spec.rootfs = request.rootfs_path or ""
+            handle.image = request.image
         elif request.backend in NEEDS_ROOTFS:
             materialised = self._provider(request).materialise(
                 self._rootfs_spec(request), request.name)

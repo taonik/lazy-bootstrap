@@ -504,6 +504,63 @@ class TestAcquisitionPolicy(unittest.TestCase):
         self.assertFalse(target.exists())
 
 
+# --- the VM class -----------------------------------------------------------
+
+
+class TestVmDrivers(unittest.TestCase):
+    def setUp(self):
+        from lazybootstrap.orchestration.executors import vm
+
+        self.vm = vm
+
+    def test_engine_falls_back_to_the_default_driver(self):
+        # --engine is shared with the container backends, where it means podman.
+        self.assertEqual(self.vm.resolve_driver_name("podman"), "qemu")
+        self.assertEqual(self.vm.resolve_driver_name(""), "qemu")
+        self.assertEqual(self.vm.resolve_driver_name("qemu"), "qemu")
+
+    def test_unimplemented_drivers_say_so_distinctly(self):
+        from lazybootstrap.orchestration.executors.base import ExecutorError
+
+        with self.assertRaises(ExecutorError) as caught:
+            self.vm.get_driver("libvirt")
+        self.assertIn("not implemented", str(caught.exception))
+
+        with self.assertRaises(ExecutorError) as caught:
+            self.vm.get_driver("hyperv")
+        self.assertIn("unknown VM driver", str(caught.exception))
+
+    def test_probe_reports_every_known_driver(self):
+        report = self.vm.probe()
+        self.assertEqual(set(report), set(self.vm.KNOWN_DRIVERS))
+        for info in report.values():
+            self.assertIn(info["available"], ("yes", "no"))
+
+    def test_accel_choice(self):
+        driver = self.vm.QemuDriver()
+        self.assertEqual(driver.accel_flag(self.vm.VmSpec(accel="tcg")), ["-accel", "tcg"])
+        self.assertEqual(driver.accel_flag(self.vm.VmSpec(accel="kvm")), ["-accel", "kvm"])
+        # auto follows the host: exactly one of the two, never a crash.
+        self.assertIn(driver.accel_flag(self.vm.VmSpec())[1], ("kvm", "tcg"))
+
+    def test_disk_format_is_guessed_when_qemu_img_cannot_tell(self):
+        self.assertEqual(self.vm._disk_format(self.vm.VmSpec(image="/x/d.raw")), "raw")
+        self.assertEqual(self.vm._disk_format(self.vm.VmSpec(image="/x/d.qcow2")), "qcow2")
+        self.assertEqual(
+            self.vm._disk_format(self.vm.VmSpec(image="/x/d.qcow2", disk_format="raw")), "raw")
+
+    def test_a_container_reference_is_not_a_bootable_disk(self):
+        request = envspec.EnvironmentRequest(backend="vm", image="debian:13-slim")
+        state = Orchestrator().available(request)
+        self.assertFalse(state.satisfied)
+        self.assertEqual(state.action, envspec.UNAVAILABLE)
+
+    def test_a_vm_without_anything_bootable_is_unavailable(self):
+        state = Orchestrator().available(envspec.EnvironmentRequest(backend="vm"))
+        self.assertEqual(state.action, envspec.UNAVAILABLE)
+        self.assertIn("disk image", state.detail)
+
+
 # --- utilities --------------------------------------------------------------
 
 

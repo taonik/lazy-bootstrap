@@ -127,7 +127,7 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-p", "--profile", help="TOML profile (see profiles/)")
     parser.add_argument("--distro", help="debian | alpine | auto")
     parser.add_argument("-b", "--backend", choices=["host", "chroot", "bwrap", "firejail",
-                                                    "oci", "podman", "docker"])
+                                                    "oci", "podman", "docker", "vm", "qemu"])
     parser.add_argument("--rootfs", metavar="SPEC",
                         help="filesystem for chroot/bwrap/firejail: image[:REF] | "
                              "hostfs[:overlay|bind|copy] | dir:PATH | none "
@@ -138,7 +138,8 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
                         help="shell command that populates a dir: rootfs ($LB_ROOTFS is set)")
     parser.add_argument("--workdir", metavar="PATH",
                         help="build directory inside the environment; 'temp' for a throwaway one")
-    parser.add_argument("--engine", choices=["podman", "docker"])
+    parser.add_argument("--engine", choices=["podman", "docker", "qemu", "libvirt"],
+                        help="container engine, or VM driver when --backend vm")
     parser.add_argument("--registry-mirror", action="append", default=None,
                         metavar="REGISTRY=MIRROR",
                         help="e.g. docker.io=mirror.gcr.io (repeatable)")
@@ -147,6 +148,9 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
                         help="apt: 'debian=http://host/debian trixie main'; apk: 'alpine=<aports branch>'")
     parser.add_argument("--image-setup", action="append", default=None, metavar="CMD",
                         help="shell command run once on the image before anything else")
+    parser.add_argument("--vm-option", action="append", default=None, metavar="KEY=VALUE",
+                        help="VM driver setting: SSH_KEY, SSH_USER, SEED, MEMORY, CPUS, "
+                             "ACCEL, BOOT_TIMEOUT (repeatable)")
     parser.add_argument("--acquire", choices=["auto", "require", "download", "build"],
                         help="what the orchestrator may do to obtain the environment: "
                              "auto (pull if missing, the default), require (never fetch), "
@@ -205,6 +209,8 @@ def resolve_config(args: argparse.Namespace) -> RunConfig:
         mirrors = dict(cfg.registry_mirrors)
         mirrors.update(_pairs(args.registry_mirror))
         overrides["registry_mirrors"] = mirrors
+    if getattr(args, "vm_option", None):
+        overrides["vm_options"] = {**cfg.vm_options, **_pairs(args.vm_option)}
     if getattr(args, "source_mirror", None):
         mirrors = dict(cfg.source_mirrors)
         mirrors.update(_pairs(args.source_mirror))
