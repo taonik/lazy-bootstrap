@@ -1,0 +1,43 @@
+# Build the worker images for every flavour in ci/flavours.toml.
+#
+# Disabled by default: this iteration validates builds locally instead
+# (docs/SPECS.md D-21). Turn it on by setting the repository variable
+#     LAZY_BOOTSTRAP_CI = enabled
+# or by dispatching it by hand.
+name: images
+
+on:
+  workflow_dispatch:
+    inputs:
+      flavour:
+        description: "Single flavour to build (empty = all)"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  matrix:
+    if: github.event_name == 'workflow_dispatch' || vars.LAZY_BOOTSTRAP_CI == 'enabled'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enumerate flavours
+        id: flavours
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, tomllib
+          rows = tomllib.load(open("ci/flavours.toml", "rb"))["flavour"]
+          wanted = "${{ inputs.flavour }}".strip()
+          names = [r["name"] for r in rows if not wanted or r["name"] == wanted]
+          print("names=" + json.dumps(names))
+          PY
+
+      - name: Build images
+        run: ci/build-images.sh ${{ inputs.flavour }}
+        env:
+          ENGINE: podman
+
+      - name: Show what was built
+        run: podman images --format '{{.Repository}}:{{.Tag}}  {{.Size}}'

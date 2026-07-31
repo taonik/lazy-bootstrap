@@ -1,0 +1,43 @@
+# Rebuild every package of alpine + libc6-compat, comparing four toolchains.
+#
+#   ./lazy-bootstrap rebuild --profile profiles/alpine-libc6-compat.toml
+#
+# Note on libc6-compat: it is gcompat, a *shim* over musl, not glibc. The image
+# stays musl, so Fil-C gets its musl (pizfix) build and the upstream LLVM
+# tarballs - which are glibc-linked - are not a sensible fallback here
+# (docs/SPECS.md D-13).
+
+image = "docker.io/library/alpine:latest"
+distro = "alpine"
+
+# Applied once to the image before anything else.
+image_setup = ["apk add --no-cache libc6-compat"]
+
+[run]
+backend = "podman"
+engine = "podman"
+grouping = "all"
+timeout = 3600
+default_toolchain = "gcc"
+preflight = true
+system_deps = "target"
+
+[plumbing]
+registry_mirrors = { "docker.io" = "mirror.gcr.io" }
+
+[[toolchains]]
+id = "gcc"
+provision = ["preinstalled", "distro"]
+
+[[toolchains]]
+id = "llvm"
+provision = ["distro"]            # distro only: upstream binaries need glibc
+
+[[toolchains]]
+id = "llvm-20.1.8"
+provision = ["distro", "binary"]  # binary is expected to need gcompat and may fail
+
+[[toolchains]]
+id = "filc-0.681"
+provision = ["binary"]
+variant = "auto"                  # musl target -> the pizfix build

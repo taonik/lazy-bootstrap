@@ -1,0 +1,8 @@
+# Unpack the Fil-C release archives (.tar.xz) inside the target.
+xz-utils
+# pizfix/setup.sh rewrites rpaths with patchelf.
+patchelf
+# pizfix symlinks the kernel headers into pizfix/os-include.
+linux-libc-dev
+# /opt/fil setup.sh parses its own options with getopt(1).
+util-linux

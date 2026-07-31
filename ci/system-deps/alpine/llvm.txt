@@ -1,0 +1,3 @@
+xz
+# Upstream LLVM binaries are glibc-linked; gcompat is the only chance on musl.
+gcompat

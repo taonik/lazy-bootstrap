@@ -1,0 +1,21 @@
+# Rebuild against *this machine*, without touching it.
+#
+#   ./lazy-bootstrap rebuild --profile profiles/host-overlay.toml
+#
+# The rootfs is a copy-on-write overlay of the host filesystem: the build sees
+# the real environment, every write lands in a throwaway upper layer, and the
+# machine is unchanged when the run ends (docs/SPECS.md D-25).
+
+distro = "auto"
+
+[run]
+backend = "chroot"
+rootfs = "hostfs:overlay"
+rootfs_path = "temp"
+default_toolchain = "gcc"
+preflight = true
+system_deps = "target"    # installs inside the overlay, not on the host
+limit = 10
+
+[[toolchains]]
+id = "gcc"

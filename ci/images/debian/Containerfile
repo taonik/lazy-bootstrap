@@ -1,0 +1,61 @@
+# lazy-bootstrap build image - Debian/Ubuntu family, one flavour per toolchain.
+#
+# Build with ci/build-images.sh, or by hand:
+#   podman build -f ci/images/debian/Containerfile \
+#       --build-arg BASE=docker.io/library/debian:13-slim \
+#       --build-arg TOOLCHAIN_KIND=filc --build-arg TOOLCHAIN_VERSION=0.681 \
+#       -t lazy-bootstrap/debian-13-slim:filc-0.681 ci
+#
+# The build context is the `ci/` directory, because the flavour's package list
+# comes from ci/system-deps/ - the same files lazy-bootstrap reads at run time,
+# so an image and an ad-hoc environment never drift apart (docs/SPECS.md D-24).
+
+ARG BASE=docker.io/library/debian:13-slim
+FROM ${BASE}
+
+ARG TOOLCHAIN_KIND=gcc
+ARG TOOLCHAIN_VERSION=""
+# distro | binary | source, comma separated, tried in order
+ARG PROVISION="distro,binary"
+ARG DEBIAN_FRONTEND=noninteractive
+
+LABEL org.opencontainers.image.title="lazy-bootstrap builder" \
+      org.opencontainers.image.description="Rebuild environment for a distro image" \
+      io.lazy-bootstrap.toolchain.kind="${TOOLCHAIN_KIND}" \
+      io.lazy-bootstrap.toolchain.version="${TOOLCHAIN_VERSION}" \
+      io.lazy-bootstrap.provision="${PROVISION}"
+
+# Step 1: the declared dependencies - common ones plus this flavour's.
+COPY system-deps/debian/ /opt/lazy-bootstrap/system-deps/
+RUN set -eux; \
+    apt-get update; \
+    pkgs="$(cat /opt/lazy-bootstrap/system-deps/common.txt \
+                /opt/lazy-bootstrap/system-deps/${TOOLCHAIN_KIND}.txt 2>/dev/null \
+            | sed 's/#.*//' | tr -s ' \n' '\n' | grep -v '^$' | sort -u | tr '\n' ' ')"; \
+    echo "installing: $pkgs"; \
+    apt-get install -y --no-install-recommends $pkgs; \
+    rm -rf /var/lib/apt/lists/*
+
+# Step 2: enable deb-src, so `apt-get source` works without further setup.
+RUN set -eux; \
+    for f in /etc/apt/sources.list.d/*.sources; do \
+        [ -e "$f" ] || continue; \
+        sed 's/^Types:.*/Types: deb-src/' "$f" \
+            >> /etc/apt/sources.list.d/lazy-bootstrap-src.sources; \
+    done; \
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list; do \
+        [ -e "$f" ] || continue; \
+        sed -n 's/^deb \(.*\)$/deb-src \1/p' "$f" \
+            >> /etc/apt/sources.list.d/lazy-bootstrap-src.list || true; \
+    done; \
+    true
+
+# Step 3: the toolchain itself. `distro` resolves to packages here; `binary`
+# is left to lazy-bootstrap at run time so the image stays small and the exact
+# release is a run-time decision rather than a rebake.
+COPY images/debian/install-toolchain.sh /opt/lazy-bootstrap/install-toolchain.sh
+RUN set -eux; \
+    DEBIAN_FRONTEND=noninteractive \
+    sh /opt/lazy-bootstrap/install-toolchain.sh "${TOOLCHAIN_KIND}" "${TOOLCHAIN_VERSION}" "${PROVISION}"
+
+WORKDIR /build

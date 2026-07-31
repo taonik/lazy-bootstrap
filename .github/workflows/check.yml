@@ -1,0 +1,34 @@
+# Fast checks: unit tests and a lint pass. No builds, no network beyond the
+# checkout, so this one is safe to enable immediately.
+name: check
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Unit tests
+        run: python3 tests/test_unit.py
+
+      - name: Shell syntax
+        run: |
+          for f in sh/lazy-bootstrap.sh ci/build-images.sh tests/matrix.sh \
+                   ci/images/*/install-toolchain.sh; do
+            bash -n "$f" && echo "ok  $f"
+          done
+
+      - name: CLI is importable and self-describing
+        run: |
+          ./lazy-bootstrap --help > /dev/null
+          ./lazy-bootstrap toolchains
+          ./lazy-bootstrap build-worker --list

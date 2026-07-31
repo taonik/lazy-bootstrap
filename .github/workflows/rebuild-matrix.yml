@@ -1,0 +1,70 @@
+# The real thing: rebuild an image's packages with several toolchains and
+# publish the comparison.
+#
+# Disabled by default (docs/SPECS.md D-21) - a full matrix is hours of compute.
+# Enable with the repository variable LAZY_BOOTSTRAP_CI=enabled, or dispatch it.
+name: rebuild-matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Profile to run"
+        required: true
+        default: "profiles/debian-13-slim.toml"
+      limit:
+        description: "Max source packages (0 = all)"
+        required: false
+        default: "20"
+      backend:
+        description: "host | chroot | bwrap | firejail | podman | docker"
+        required: false
+        default: "podman"
+
+jobs:
+  rebuild:
+    if: github.event_name == 'workflow_dispatch' || vars.LAZY_BOOTSTRAP_CI == 'enabled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install execution backends
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            podman bubblewrap firejail skopeo umoci uidmap
+
+      - name: What can this runner do
+        run: ./lazy-bootstrap doctor
+
+      - name: Rebuild
+        run: |
+          ./lazy-bootstrap rebuild \
+            --profile "${{ inputs.profile }}" \
+            --backend "${{ inputs.backend }}" \
+            --limit "${{ inputs.limit }}" \
+            --out-dir runs
+
+      - name: Job summary
+        if: always()
+        run: |
+          for f in runs/comparisons/*.md; do
+            [ -e "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          done
+          for f in runs/*/report.md; do
+            [ -e "$f" ] && cat "$f" >> "$GITHUB_STEP_SUMMARY"
+          done
+          true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lazy-bootstrap-reports
+          path: |
+            runs/**/report.json
+            runs/**/report.html
+            runs/comparisons/**

@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lazy-bootstrap"
+version = "0.1.0"
+description = "Rebuild every package of a distro image, with a toolchain of your choice"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = []          # stdlib only, on purpose (docs/SPECS.md D-01)
+
+[project.scripts]
+lazy-bootstrap = "lazybootstrap.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
