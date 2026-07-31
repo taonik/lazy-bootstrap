@@ -1,0 +1,46 @@
+# Rebuild every package of debian:13-slim, comparing four toolchains.
+#
+#   ./lazy-bootstrap rebuild --profile profiles/debian-13-slim.toml
+#
+# gcc is the baseline and is verified first (preflight): if the distro's own
+# compiler cannot rebuild the image, comparing the others tells you nothing.
+
+image = "docker.io/library/debian:13-slim"
+distro = "debian"
+
+[run]
+backend = "podman"
+engine = "podman"
+grouping = "all"          # one environment for the whole image
+timeout = 3600            # per source package
+build_jobs = 0            # 0 = nproc
+default_toolchain = "gcc"
+preflight = true
+preflight_package = "hostname"   # a real, tiny rebuild before the matrix
+system_deps = "target"
+
+[plumbing]
+# Docker Hub blobs are unreachable from some networks; a registry mirror is a
+# configuration detail, not a workaround (docs/SPECS.md D-20).
+registry_mirrors = { "docker.io" = "mirror.gcr.io" }
+
+# Packages whose rebuild is not meaningful here: firmware/kernel blobs and the
+# archive keyring, which is data rather than code.
+exclude = ["linux-image-*", "*-firmware", "debian-archive-keyring"]
+
+[[toolchains]]
+id = "gcc"
+provision = ["preinstalled", "distro"]
+
+[[toolchains]]
+id = "llvm"                       # whatever clang Debian ships
+provision = ["distro", "binary"]
+
+[[toolchains]]
+id = "llvm-20.1.8"                # exactly this version, or the release tarball
+provision = ["distro", "binary"]
+
+[[toolchains]]
+id = "filc-0.681"                 # clang 20.1.8 with Fil-C's memory safety
+provision = ["binary"]
+variant = "auto"                  # glibc image -> the /opt/fil build

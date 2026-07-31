@@ -1,0 +1,5 @@
+# Alpine: abuild and friends.
+alpine-sdk
+build-base
+git
+ca-certificates

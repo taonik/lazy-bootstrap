@@ -1,0 +1,128 @@
+# Build image flavours: distro x toolchain.
+#
+# One row per image we know how to build. `ci/build-images.sh` reads this file,
+# `lazy-bootstrap toolchains` prints it, and the GitHub workflow turns it into a
+# job matrix - so the set of flavours is defined exactly once (docs/SPECS.md D-19).
+#
+# Fields
+#   name        image tag suffix, and the id used in reports
+#   distro      which ci/images/<distro>/Containerfile to use
+#   base        base image reference
+#   toolchain   toolchain id handed to lazy-bootstrap (kind[-version])
+#   provision   ordered strategies: distro | binary | source
+#   default     marks the baseline toolchain for that distro
+#   args        extra --build-arg pairs
+
+[[flavour]]
+name = "debian-13-slim-gcc"
+distro = "debian"
+base = "docker.io/library/debian:13-slim"
+toolchain = "gcc"
+provision = ["distro"]
+default = true
+description = "Debian 13 slim with its own gcc - the reference every comparison uses."
+
+[[flavour]]
+name = "debian-13-slim-llvm"
+distro = "debian"
+base = "docker.io/library/debian:13-slim"
+toolchain = "llvm"
+provision = ["distro", "binary"]
+description = "Whatever clang the distro ships; the 'run with clang' baseline."
+
+[[flavour]]
+name = "debian-13-slim-llvm-20.1.8"
+distro = "debian"
+base = "docker.io/library/debian:13-slim"
+toolchain = "llvm-20.1.8"
+provision = ["distro", "binary"]
+description = "Exactly clang 20.1.8: distro package if it really is that version, upstream release tarball otherwise."
+
+[[flavour]]
+name = "debian-13-slim-filc-0.681"
+distro = "debian"
+base = "docker.io/library/debian:13-slim"
+toolchain = "filc-0.681"
+provision = ["binary"]
+description = "Fil-C 0.681 (clang 20.1.8), glibc /opt/fil variant."
+
+[[flavour]]
+name = "alpine-gcc"
+distro = "alpine"
+base = "docker.io/library/alpine:latest"
+toolchain = "gcc"
+provision = ["distro"]
+default = true
+description = "Alpine with its own gcc."
+
+[[flavour]]
+name = "alpine-libc6-compat-gcc"
+distro = "alpine"
+base = "docker.io/library/alpine:latest"
+toolchain = "gcc"
+provision = ["distro"]
+args = { WITH_LIBC6_COMPAT = "1" }
+description = "Alpine + libc6-compat. Still musl: gcompat is a shim, not glibc."
+
+[[flavour]]
+name = "alpine-libc6-compat-llvm"
+distro = "alpine"
+base = "docker.io/library/alpine:latest"
+toolchain = "llvm"
+provision = ["distro"]
+args = { WITH_LIBC6_COMPAT = "1" }
+description = "Alpine clang. Upstream LLVM tarballs are glibc-linked, so 'distro' only."
+
+[[flavour]]
+name = "alpine-libc6-compat-llvm-20.1.8"
+distro = "alpine"
+base = "docker.io/library/alpine:latest"
+toolchain = "llvm-20.1.8"
+provision = ["distro", "binary"]
+args = { WITH_LIBC6_COMPAT = "1" }
+description = "Pinned clang 20.1.8 on musl; expected to need libc6-compat and may still fail to run."
+
+[[flavour]]
+name = "alpine-libc6-compat-filc-0.681"
+distro = "alpine"
+base = "docker.io/library/alpine:latest"
+toolchain = "filc-0.681"
+provision = ["binary"]
+args = { WITH_LIBC6_COMPAT = "1" }
+description = "Fil-C 0.681 musl (pizfix) build - the correct variant for Alpine even with libc6-compat."
+
+# --- mixed flavours ---------------------------------------------------------
+# One image, two toolchains: an experimental one plus the distro default to fall
+# back to. Used with `--fallback-toolchain`, so a package that will not build
+# with the experiment is still rebuilt and the report records which one won.
+
+[[flavour]]
+name = "debian-13-slim-filc-gcc-fallback"
+distro = "debian"
+base = "docker.io/library/debian:13-slim"
+toolchain = "filc-0.681"
+fallback = "gcc"
+provision = ["binary"]
+mixed = true
+description = "Fil-C first, gcc for whatever refuses to build with it."
+
+[[flavour]]
+name = "debian-13-slim-llvm-gcc-fallback"
+distro = "debian"
+base = "docker.io/library/debian:13-slim"
+toolchain = "llvm"
+fallback = "gcc"
+provision = ["distro"]
+mixed = true
+description = "clang first, gcc as the safety net."
+
+[[flavour]]
+name = "alpine-libc6-compat-filc-gcc-fallback"
+distro = "alpine"
+base = "docker.io/library/alpine:latest"
+toolchain = "filc-0.681"
+fallback = "gcc"
+provision = ["binary"]
+args = { WITH_LIBC6_COMPAT = "1" }
+mixed = true
+description = "Fil-C musl first, Alpine gcc as the safety net."

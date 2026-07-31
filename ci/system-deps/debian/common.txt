@@ -1,0 +1,7 @@
+# Debian/Ubuntu: the minimum that makes dpkg-buildpackage work at all.
+build-essential
+fakeroot
+dpkg-dev
+debhelper
+devscripts
+ca-certificates

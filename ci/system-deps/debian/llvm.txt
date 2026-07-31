@@ -1,0 +1,4 @@
+# Needed to unpack the upstream LLVM release tarball (.tar.xz) inside the target.
+xz-utils
+# Upstream clang links against libstdc++ from the distro.
+libstdc++-dev
