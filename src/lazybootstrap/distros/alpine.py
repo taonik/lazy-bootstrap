@@ -32,6 +32,19 @@ BUILD_ESSENTIAL = ["alpine-sdk", "build-base", "git", "ca-certificates", "wget"]
 APORTS_REPOS = ("main", "community", "testing")
 
 
+def _abuild_phases(ctx) -> str:
+    """Phases for abuild, naming them only when `check` must be left out.
+
+    Bare `abuild` runs sanitycheck..check..rootpkg. There is no "skip check"
+    flag, so disabling tests means listing the phases explicitly - and listing
+    them is worse than the default when they are wanted, because the list can
+    drift from what abuild does.
+    """
+    if getattr(ctx, "run_check", True):
+        return ""
+    return "sanitycheck builddeps clean unpack prepare build rootpkg"
+
+
 def _common_packages(ctx) -> list[str]:
     from ..sysdeps import load
 
@@ -248,9 +261,9 @@ if [ "$(id -u)" = 0 ] && id {BUILD_USER} >/dev/null 2>&1; then
     # (and therefore the shim), LB_CC and the proxy settings. HOME must still
     # be overridden: abuild writes to ~/.abuild and /root is not writable here.
     su -p {BUILD_USER} -s /bin/sh -c \
-        "HOME=/home/{BUILD_USER}; export HOME; cd \"$PWD\" && abuild -d -K"
+        "HOME=/home/{BUILD_USER}; export HOME; cd \"$PWD\" && abuild -d -K {_abuild_phases(ctx)}"
 else
-    abuild -r -K
+    abuild -r -K {_abuild_phases(ctx)}
 fi
 """
         return executor.run(script, title=f"abuild {tree.name}", env=ctx.env, cwd=tree.path,

@@ -117,6 +117,10 @@ class RunConfig:
     distfiles_mirror: str = ""
     #: Caching proxy for build dependencies. Empty = fetch from the archive.
     package_cache: str = ""
+    #: "on" | "off" - run each package's own test suite. See D-36.
+    check: str = "on"
+    #: raw --resource specs; parsed by lazybootstrap.limits.parse()
+    resource: list[str] = field(default_factory=list)
     cache_budget: str = ""          # "" = 25% of free space on the cache fs
     env_budget: str = ""            # "" = whatever the environment reports
     env_store: str = ""             # "" = <cache_dir>/env

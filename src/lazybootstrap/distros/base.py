@@ -34,6 +34,12 @@ class BuildContext:
     keep_sources: bool = False
     #: sysdeps.SysDeps for this environment; None disables declared deps (D-24)
     sysdeps: object | None = None
+    #: Run each package's own test suite. On by default: a package that builds
+    #: but fails its tests has not been shown to rebuild correctly, and hiding
+    #: that behind a default would overstate every result this tool produces.
+    run_check: bool = True
+    #: Seconds allowed for the test phase specifically; 0 -> use `timeout`.
+    check_timeout: int = 0
 
 
 @dataclass

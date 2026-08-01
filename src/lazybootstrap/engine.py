@@ -320,7 +320,20 @@ class Engine:
             unit=unit,
             source_mirror=mirror,
             sysdeps=env.sysdeps,
+            run_check=self.config.check != "off",
+            check_timeout=self._limits().for_phase("test").time or 0,
         )
+
+    def _limits(self):
+        """Parsed resource limits, resolved once per run."""
+        from . import limits as limits_mod
+        if getattr(self, "_limits_cache", None) is None:
+            self._limits_cache = limits_mod.parse(self.config.resource)
+            for note in self._limits_cache.describe_enforcement(self.config.backend):
+                # Never silent: a limit the user believes in but which nothing
+                # enforces is worse than no limit at all.
+                log.warning("resource limit not fully enforced - %s", note)
+        return self._limits_cache
 
     # -- one source package -------------------------------------------------
 

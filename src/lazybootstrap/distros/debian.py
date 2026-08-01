@@ -216,7 +216,7 @@ echo "LB_VERSION=$(cd "$tree" && dpkg-parsechangelog -S Version 2>/dev/null || e
         script = f"""
 set -e
 cd {_q(tree.path)}
-DEB_BUILD_OPTIONS="${{DEB_BUILD_OPTIONS:-}} parallel={jobs} nocheck nodoc"
+DEB_BUILD_OPTIONS="${{DEB_BUILD_OPTIONS:-}} parallel={jobs} {_check_opt(ctx)}nodoc"
 export DEB_BUILD_OPTIONS="$(echo "$DEB_BUILD_OPTIONS" | tr -s ' ' | sed 's/^ //;s/ $//')"
 echo "--- compiler in use ---"
 command -v cc gcc 2>/dev/null || true
@@ -292,6 +292,16 @@ def _forward_env_snippet() -> str:
         "done",
     ]
     return "\n".join(lines)
+
+
+def _check_opt(ctx) -> str:
+    """`nocheck ` when tests are disabled, nothing when they are not.
+
+    Debian's own switch for this is DEB_BUILD_OPTIONS=nocheck, which every
+    policy-conforming package honours - there is no need to reach into
+    debian/rules.
+    """
+    return "" if getattr(ctx, "run_check", True) else "nocheck "
 
 
 def _q(value: str) -> str:

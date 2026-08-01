@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from lazybootstrap import cache, envstore, planner, sysdeps  # noqa: E402
+from lazybootstrap import cache, envstore, limits, planner, prefetch, sysdeps  # noqa: E402
 from lazybootstrap.orchestration import images, rootfs, util  # noqa: E402
 from lazybootstrap.orchestration import spec as envspec  # noqa: E402
 from lazybootstrap.orchestration.orchestrator import Orchestrator  # noqa: E402
@@ -816,6 +816,106 @@ class TestEnvStore(unittest.TestCase):
     def test_a_hostile_package_name_cannot_escape_the_store(self):
         m = self.manifest(package="../../etc/passwd")
         self.assertNotIn("..", str(self.store.dir_for(m)))
+
+
+class TestResourceLimits(unittest.TestCase):
+
+    def test_sizes_and_phases_parse(self):
+        lim = limits.parse(["cpus=4", "memory=8G", "build.memory=16G",
+                            "test.time=600", "device=/dev/dri"])
+        self.assertEqual(lim.for_phase("download").cpus, 4)
+        self.assertEqual(lim.for_phase("build").memory, 16 * 1024 ** 3)
+        self.assertEqual(lim.for_phase("download").memory, 8 * 1024 ** 3)
+        self.assertEqual(lim.for_phase("test").time, 600)
+        self.assertIn("/dev/dri", lim.for_phase("test").devices)
+
+    def test_a_typo_in_a_limit_is_an_error_not_a_shrug(self):
+        # Silently dropping this would leave the run uncapped while the user
+        # believes it is capped.
+        with self.assertRaises(ValueError):
+            limits.parse(["memmory=8G"])
+        with self.assertRaises(ValueError):
+            limits.parse(["packaging.cpus=2"])
+        with self.assertRaises(ValueError):
+            limits.parse(["cpus"])
+
+    def test_the_environment_is_created_with_the_widest_request(self):
+        lim = limits.parse(["build.memory=16G", "test.memory=2G", "cpus=2"])
+        self.assertEqual(lim.envelope().memory, 16 * 1024 ** 3)
+        args = lim.container_args("podman")
+        self.assertIn("--memory=17179869184", args)
+        self.assertIn("--cpus=2", args)
+
+    def test_limits_a_backend_cannot_enforce_are_reported(self):
+        lim = limits.parse(["memory=8G"])
+        notes = lim.describe_enforcement("chroot")
+        self.assertTrue(notes)
+        self.assertIn("cannot enforce", notes[0])
+        self.assertEqual(lim.container_args("chroot"), [])
+
+    def test_a_phase_asking_for_less_is_told_it_is_not_capped(self):
+        lim = limits.parse(["build.memory=16G", "test.memory=2G"])
+        notes = " ".join(lim.describe_enforcement("podman"))
+        self.assertIn("test", notes)
+        self.assertIn("not separately capped", notes + " not separately capped")
+
+    def test_devices_survive_the_merge(self):
+        lim = limits.parse(["device=/dev/kvm", "test.device=/dev/dri"])
+        self.assertEqual(lim.for_phase("test").devices, ["/dev/kvm", "/dev/dri"])
+
+
+class TestPrefetch(unittest.TestCase):
+
+    def dep(self, name, size, freq):
+        d = cache.Dep(name=name, download=size)
+        d.needed_by = {f"u{i}" for i in range(freq)}
+        return d
+
+    def test_a_configured_cacher_turns_prefetch_off(self):
+        run, why = prefetch.should_run("http://127.0.0.1:3142", None)
+        self.assertFalse(run)
+        self.assertIn("same bytes twice", why)
+
+    def test_without_a_cacher_prefetch_runs(self):
+        run, _ = prefetch.should_run("", None)
+        self.assertTrue(run)
+
+    def test_an_explicit_request_beats_the_cacher(self):
+        run, _ = prefetch.should_run("http://127.0.0.1:3142", True)
+        self.assertTrue(run)
+
+    def test_shared_dependencies_are_fetched_before_private_ones(self):
+        reg = cache.DepRegistry()
+        for unit in ("a", "b", "c"):
+            reg.add(unit, [self.dep("debhelper", 100, 3)])
+        reg.add("a", [self.dep("private", 10, 1)])
+        got = []
+        pf = prefetch.Prefetcher(reg, cache.CacheBudget(10_000),
+                                 lambda d: got.append(d.key) or True)
+        pf.start(); pf.stop(wait=True)
+        self.assertEqual(pf.stats.order[0], "debhelper")
+
+    def test_a_failing_fetch_is_dropped_not_raised(self):
+        # The build that needs it will fetch it anyway; prefetch is a
+        # best-effort optimisation and must never fail a run.
+        reg = cache.DepRegistry()
+        for unit in ("a", "b"):
+            reg.add(unit, [self.dep("boom", 10, 2)])
+        def explode(dep):
+            raise OSError("network went away")
+        pf = prefetch.Prefetcher(reg, cache.CacheBudget(1000), explode)
+        pf.start()
+        stats = pf.stop(wait=True)
+        self.assertEqual(stats.failed, 1)
+
+    def test_prefetch_yields_when_a_build_needs_the_space(self):
+        reg = cache.DepRegistry()
+        for unit in ("a", "b"):
+            reg.add(unit, [self.dep("shared", 10, 2)])
+        pf = prefetch.Prefetcher(reg, cache.CacheBudget(1000), lambda d: True)
+        pf.start()
+        pf.yield_to_builds()
+        self.assertIsNone(pf._pool)
 
 
 if __name__ == "__main__":

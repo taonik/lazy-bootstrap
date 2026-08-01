@@ -162,6 +162,15 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--distfiles-mirror", metavar="URL",
                         help="Alpine: mirror of upstream tarballs "
                              "(e.g. https://distfiles.alpinelinux.org/distfiles/)")
+    parser.add_argument("--check", choices=["on", "off"], default=None,
+                        help="run each package's own test suite (default: on). "
+                             "A package that builds but fails its tests has not "
+                             "been shown to rebuild correctly.")
+    parser.add_argument("--resource", action="append", default=None, metavar="KEY=VALUE",
+                        help="resource limit, optionally per phase: cpus=4, "
+                             "memory=8G, time=600, jobs=2, device=/dev/dri, or "
+                             "build.memory=16G / test.time=600 / download.jobs=2. "
+                             "Repeatable.")
     parser.add_argument("--package-cache", metavar="URL",
                         help="caching proxy for build dependencies, e.g. "
                              "http://127.0.0.1:3142 (see ci/cache/compose.yml)")
@@ -221,7 +230,7 @@ def resolve_config(args: argparse.Namespace) -> RunConfig:
                  "timeout", "build_jobs", "limit", "include", "exclude",
                  "default_toolchain", "fallback_toolchain", "preflight_package",
                  "system_deps", "rootfs", "rootfs_path", "rootfs_prepare", "workdir",
-                 "acquire", "distfiles_mirror", "package_cache",
+                 "acquire", "distfiles_mirror", "package_cache", "check", "resource",
                  "cache_budget", "env_budget", "env_store", "env_reuse",
                  "env_slice"):
         value = getattr(args, name, None)
