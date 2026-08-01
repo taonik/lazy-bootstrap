@@ -1,15 +1,28 @@
-# Fast checks: unit tests and a lint pass. No builds, no network beyond the
-# checkout, so this one is safe to enable immediately.
+# Fast checks: unit tests, shell syntax, a CLI smoke test.
+#
+# Off by default, on purpose. Nothing here runs unless the pull request carries
+# the `ci:check` label, or someone dispatches it by hand. Add the label to a PR
+# to turn the checks on for it; remove the label to turn them off again.
+#
+# The checks themselves are not written here - they live in ci/checks.sh, so
+# they can be run before pushing, on a laptop, or by a CI that is not GitHub. A
+# check that exists only inside a workflow file cannot be run when it would be
+# most useful, which is before the push.
 name: check
 
 on:
-  push:
-    branches: ["**"]
   pull_request:
+    # `labeled` is what lets adding the label start a run on an already-open PR.
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
 
 jobs:
-  unit:
+  checks:
+    # No `push:` trigger above: a push carries no labels, so it could not be
+    # gated this way at all. Manual dispatch covers a branch without a PR.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:check')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,18 +30,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Unit tests
-        run: python3 tests/test_unit.py
-
-      - name: Shell syntax
-        run: |
-          for f in sh/lazy-bootstrap.sh ci/build-images.sh tests/matrix.sh \
-                   ci/images/*/install-toolchain.sh; do
-            bash -n "$f" && echo "ok  $f"
-          done
-
-      - name: CLI is importable and self-describing
-        run: |
-          ./lazy-bootstrap --help > /dev/null
-          ./lazy-bootstrap toolchains
-          ./lazy-bootstrap build-worker --list
+      # One entry point, the same one a developer runs locally. Its exit code
+      # is the number of failed groups.
+      - name: ci/checks.sh
+        run: ./ci/checks.sh

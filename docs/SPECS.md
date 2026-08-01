@@ -657,6 +657,42 @@ riconosce il caso e lo dice:
 > the toolchain works, but this target has no C library headers
 > (install libc6-dev / musl-dev / libc-dev). Nothing is wrong with the compiler.
 
+### D-36 — I test del pacchetto si eseguono per default
+Debian passava `nocheck` **incondizionatamente**, Alpine eseguiva `check()`.
+Due distro, due risposte diverse alla stessa domanda, e nessuna delle due
+scelta di proposito.
+
+Ora c'è un interruttore, `--check {on,off}`, **acceso di default**. Un pacchetto
+che compila ma fallisce la propria suite di test non ha dimostrato di
+ricompilare correttamente, e nasconderlo dietro un default gonfierebbe ogni
+risultato prodotto da questo strumento. Debian usa `DEB_BUILD_OPTIONS=nocheck`
+quando si disattiva, Alpine nomina le fasi omettendo `check` — abuild non ha un
+flag per saltarla.
+
+**Conseguenza da registrare**: i risultati Debian precedenti a questa modifica
+non hanno mai eseguito le suite di test, quindi sono più ottimistici del vero.
+
+### D-37 — Un limite ignorato in silenzio è peggio di nessun limite
+`--resource` accetta limiti per fase (`download`, `build`, `test`) con un
+default globale sotto: `cpus`, `memory`, `time`, `jobs`, `device`.
+
+Quel che va detto è **cosa viene davvero applicato**. `podman exec` non
+restringe un cgroup per singolo comando, e qui gira un container per ambiente
+con ogni passo come `exec`: cpu, memoria e device si impostano alla creazione,
+col valore più largo fra le fasi, e una fase che ne chiedeva meno **non è
+capata separatamente**. Il tempo invece è esatto per fase, perché è il nostro
+timeout.
+
+`describe_enforcement()` dichiara ogni scostamento, e un backend che non applica
+nulla (host, chroot) lo dice una volta. Un refuso in un limite è un **errore**,
+non un'alzata di spalle: ignorarlo lascerebbe la run senza tetto mentre
+l'utente la crede limitata.
+
+**Nota su come è stato trovato**: la prima versione di questa funzionalità
+parsava i limiti, emetteva gli avvisi e lasciava il container senza cap —
+`container_args()` non veniva mai chiamato. Verificato ispezionando un
+container vivo (`NanoCpus`, `Memory`), non rileggendo il codice.
+
 ---
 
 ## 5. Reporting
