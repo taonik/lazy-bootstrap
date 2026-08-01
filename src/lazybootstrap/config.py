@@ -115,6 +115,13 @@ class RunConfig:
     #: https://distfiles.alpinelinux.org/distfiles/ . One reachable host instead
     #: of one per package (D-20).
     distfiles_mirror: str = ""
+    #: Caching proxy for build dependencies. Empty = fetch from the archive.
+    package_cache: str = ""
+    cache_budget: str = ""          # "" = 25% of free space on the cache fs
+    env_budget: str = ""            # "" = whatever the environment reports
+    env_store: str = ""             # "" = <cache_dir>/env
+    env_reuse: str = "strict"
+    env_slice: str = "exact"
     #: VM driver settings, passed through as LB_VM_<KEY> (docs/SPECS.md D-28)
     vm_options: dict[str, str] = field(default_factory=dict)
     engine: str = "podman"                  # oci backend: podman | docker

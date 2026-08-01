@@ -225,17 +225,24 @@ export REPODEST={ctx.workdir}/packages
 # Alpine mirrors every upstream tarball; abuild prefers this over the
 # per-package URLs, which is the difference between needing one reachable
 # host and needing dozens (D-20).
-[ -n "${{LB_DISTFILES_MIRROR:-}}" ] && export DISTFILES_MIRROR="$LB_DISTFILES_MIRROR"
+# Trailing slash stripped: abuild appends one, and the doubled slash makes
+# some mirrors answer 403 instead of serving the file.
+[ -n "${{LB_DISTFILES_MIRROR:-}}" ] && \
+    export DISTFILES_MIRROR="${{LB_DISTFILES_MIRROR%/}}"
 echo "--- compiler in use ---"
 "${{LB_CC:-cc}}" --version 2>&1 | head -n 2 || true
 echo "--- abuild ---"
 if [ "$(id -u)" = 0 ] && id {BUILD_USER} >/dev/null 2>&1; then
+    # REPODEST must exist before it can be handed over: abuild creates it as
+    # the build user, who cannot write to a root-owned /build, and the failure
+    # surfaces much later as "rootpkg failed".
+    mkdir -p "$REPODEST"
     chown -R {BUILD_USER} . "$REPODEST" 2>/dev/null || true
     # busybox `su -p` preserves the environment, which is what carries PATH
     # (and therefore the shim), LB_CC and the proxy settings. HOME must still
     # be overridden: abuild writes to ~/.abuild and /root is not writable here.
     su -p {BUILD_USER} -s /bin/sh -c \
-        "HOME=/home/{BUILD_USER}; export HOME; cd \"$PWD\" && abuild -K"
+        "HOME=/home/{BUILD_USER}; export HOME; cd \"$PWD\" && abuild -d -K"
 else
     abuild -r -K
 fi

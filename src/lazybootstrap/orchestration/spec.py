@@ -52,6 +52,8 @@ class EnvironmentRequest:
     name: str = "env"
     privileged: bool = False
     acquire: str = AUTO
+    #: caching proxy for the package manager; "" = straight to the archive
+    package_cache: str = ""
     #: free-form, carried through to the handle: flavour, toolchain, run id...
     labels: dict[str, str] = field(default_factory=dict)
     #: registry -> mirror host, applied to every image reference

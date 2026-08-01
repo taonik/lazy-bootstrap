@@ -162,6 +162,26 @@ def _add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--distfiles-mirror", metavar="URL",
                         help="Alpine: mirror of upstream tarballs "
                              "(e.g. https://distfiles.alpinelinux.org/distfiles/)")
+    parser.add_argument("--package-cache", metavar="URL",
+                        help="caching proxy for build dependencies, e.g. "
+                             "http://127.0.0.1:3142 (see ci/cache/compose.yml)")
+    parser.add_argument("--cache-budget", metavar="SIZE",
+                        help="disk the prefetch may use, e.g. 4G (default: 25%% "
+                             "of the free space on the cache filesystem)")
+    parser.add_argument("--env-budget", metavar="SIZE",
+                        help="space a single build may need before it is declined "
+                             "(default: measured free space in the environment)")
+    parser.add_argument("--env-store", metavar="PATH",
+                        help="keep prepared build environments here for reuse "
+                             "(pbuilder-style); default <cache-dir>/env")
+    parser.add_argument("--env-reuse", choices=["off", "strict", "relaxed"],
+                        default=None,
+                        help="reuse saved environments: strict (index must match), "
+                             "relaxed (refresh first), off. Default: strict")
+    parser.add_argument("--env-slice", choices=["exact", "minor", "major", "any"],
+                        default=None,
+                        help="how coarsely to key saved environments by package "
+                             "version. Default: exact")
     parser.add_argument("--vm-option", action="append", default=None, metavar="KEY=VALUE",
                         help="VM driver setting: SSH_KEY, SSH_USER, SEED, MEMORY, CPUS, "
                              "ACCEL, BOOT_TIMEOUT (repeatable)")
@@ -201,7 +221,9 @@ def resolve_config(args: argparse.Namespace) -> RunConfig:
                  "timeout", "build_jobs", "limit", "include", "exclude",
                  "default_toolchain", "fallback_toolchain", "preflight_package",
                  "system_deps", "rootfs", "rootfs_path", "rootfs_prepare", "workdir",
-                 "acquire", "distfiles_mirror"):
+                 "acquire", "distfiles_mirror", "package_cache",
+                 "cache_budget", "env_budget", "env_store", "env_reuse",
+                 "env_slice"):
         value = getattr(args, name, None)
         if value not in (None, [], ""):
             overrides[name] = value

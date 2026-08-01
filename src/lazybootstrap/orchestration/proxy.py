@@ -185,5 +185,49 @@ exit 0
     return result.ok
 
 
-__all__ = ["ProxySettings", "detect", "install_ca", "prefer_https_sources", "CA_PATH",
+def configure_package_cache(executor, url: str, unit: str = "") -> bool:
+    """Send the environment's package manager through a caching proxy.
+
+    Note the deliberate asymmetry with `prefer_https_sources` above: that
+    function moves sources to https so they traverse an egress proxy, while
+    this one keeps apt speaking *http to the cacher*. Both are right. apt uses
+    an http proxy only for http URLs - an https URL becomes a CONNECT tunnel
+    that the cacher can only pass through blindly, caching nothing. The
+    encrypted leg still happens, one hop further out: the cacher fetches from
+    the archive over https (see ci/cache/Dockerfile.apt-cacher-ng).
+
+    So when a cache is configured it takes precedence, and the https rewrite is
+    skipped for the archive host.
+    """
+    if not url:
+        return False
+    url = url.rstrip("/")
+    script = f"""
+if [ -d /etc/apt/apt.conf.d ]; then
+    printf 'Acquire::http::Proxy "%s";\n' {url!r} > /etc/apt/apt.conf.d/00-lazy-bootstrap-cache
+    # Back to http *for the cacher only*: see the docstring. The cacher's own
+    # upstream leg is https.
+    for f in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+             /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] && sed -i 's|https://deb.debian.org|http://deb.debian.org|g;
+                               s|https://archive.ubuntu.com|http://archive.ubuntu.com|g' "$f"
+    done
+    echo "apt -> {url}"
+fi
+if [ -f /etc/apk/repositories ]; then
+    # apk has no proxy setting; point the repository URLs at the cache instead.
+    sed -i "s|https\?://dl-cdn.alpinelinux.org/alpine|{url}/alpine|g" /etc/apk/repositories
+    echo "apk -> {url}/alpine"
+fi
+exit 0
+"""
+    result = executor.run(script, title="package cache", unit=unit,
+                          step_prefix="prepare")
+    if result.ok and "->" in result.output:
+        log.info("package cache in use: %s", result.output.strip().splitlines()[-1])
+    return result.ok
+
+
+__all__ = ["ProxySettings", "detect", "install_ca", "prefer_https_sources",
+           "configure_package_cache", "CA_PATH",
            "CONTAINER_HOST", "DOCKER_HOST"]

@@ -207,7 +207,16 @@ class Orchestrator:
             if proxy_mod.install_ca(handle.executor, settings, unit=request.name):
                 handle.executor.spec.env.update(proxy_mod.ca_env())
                 log.info("egress proxy in use: CA installed in %s", request.name)
-                proxy_mod.prefer_https_sources(handle.executor, settings, unit=request.name)
+                if not request.package_cache:
+                    # Only useful without a cache: with one, apt talks http to
+                    # the cacher and the cacher does the https leg upstream.
+                    proxy_mod.prefer_https_sources(
+                        handle.executor, settings, unit=request.name)
+        # Outside the proxy branch on purpose: a package cache is worth having
+        # whether or not anything sits between this machine and the archive.
+        if request.package_cache and request.network:
+            proxy_mod.configure_package_cache(
+                handle.executor, request.package_cache, unit=request.name)
         self._open.append(handle)
         return handle
 
