@@ -3,3 +3,6 @@ alpine-sdk
 build-base
 git
 ca-certificates
+# Not busybox's applet: it cannot tunnel https through a CONNECT-only
+# proxy, and abuild fetches every source tarball with wget.
+wget

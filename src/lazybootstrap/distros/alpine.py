@@ -19,7 +19,13 @@ log = get("alpine")
 
 APORTS_URL = "https://github.com/alpinelinux/aports.git"
 # Fallback list; ci/system-deps/alpine/common.txt is the real source (D-24).
-BUILD_ESSENTIAL = ["alpine-sdk", "build-base", "git", "ca-certificates"]
+#: `wget` is the real one, not busybox's applet, and it is not optional. abuild
+#: fetches sources with wget, and the busybox applet cannot tunnel https through
+#: a CONNECT-only proxy - it sends an absolute-URI GET, which such a proxy
+#: answers with 403. That reads as "the mirror rejected us" and is really "this
+#: client cannot speak to this proxy". curl in the same container works, which
+#: is what isolated it.
+BUILD_ESSENTIAL = ["alpine-sdk", "build-base", "git", "ca-certificates", "wget"]
 
 
 # aports repositories, searched in this order for a package directory.
