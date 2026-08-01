@@ -54,6 +54,8 @@ class EnvironmentRequest:
     acquire: str = AUTO
     #: caching proxy for the package manager; "" = straight to the archive
     package_cache: str = ""
+    #: engine flags for cpu/memory/device caps; see lazybootstrap.limits
+    resource_args: list[str] = field(default_factory=list)
     #: free-form, carried through to the handle: flavour, toolchain, run id...
     labels: dict[str, str] = field(default_factory=dict)
     #: registry -> mirror host, applied to every image reference

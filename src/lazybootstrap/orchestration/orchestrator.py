@@ -177,6 +177,7 @@ class Orchestrator:
             binds=dict(request.binds),
             env=dict(request.env),
             privileged=request.privileged,
+            resource_args=list(request.resource_args),
         )
         handle = EnvironmentHandle(request=request, executor=None)  # type: ignore[arg-type]
 

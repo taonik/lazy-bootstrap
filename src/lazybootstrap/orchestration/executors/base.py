@@ -67,6 +67,11 @@ class ExecutorSpec:
     network: bool = True
     name: str = ""                  # container / session name
     privileged: bool = False
+    #: Backend-level resource caps, already rendered as engine flags by
+    #: lazybootstrap.limits. Kept as flags rather than as numbers so a backend
+    #: that cannot enforce them holds an empty list instead of silently
+    #: dropping a value it was handed.
+    resource_args: list[str] = field(default_factory=list)
 
 
 class Executor(ABC):

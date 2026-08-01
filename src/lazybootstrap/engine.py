@@ -89,6 +89,8 @@ class Engine:
             network=network and self.config.network != "disabled",
             name=name,
             acquire=self.config.acquire,
+            package_cache=self.config.package_cache,
+            resource_args=self._limits().container_args(self.config.backend),
             registry_mirrors=dict(self.config.registry_mirrors),
             env={**{f"LB_VM_{k.upper()}": v for k, v in self.config.vm_options.items()},
                  **({"LB_DISTFILES_MIRROR": self.config.distfiles_mirror}

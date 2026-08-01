@@ -67,6 +67,10 @@ class OciExecutor(Executor):
             argv += ["--network", "none"]
         if self.spec.privileged:
             argv += ["--privileged"]
+        # cpu / memory / device caps. They can only be set here: `exec` cannot
+        # narrow a cgroup, which is why limits.describe_enforcement() warns
+        # about a phase asking for less than the environment was created with.
+        argv += self.spec.resource_args
         for host_path, target in self.spec.binds.items():
             util.ensure_dir(host_path)
             # :z relabels for SELinux hosts and is a no-op elsewhere.
